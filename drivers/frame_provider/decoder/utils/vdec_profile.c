@@ -44,8 +44,6 @@ uint dec_time_stat_reset;
 
 struct dentry *root, *event;
 
-#define MAX_INSTANCE_MUN  9
-
 struct vdec_profile_time_stat_s {
 	int time_6ms_less_cnt;
 	int time_6_9ms_cnt;

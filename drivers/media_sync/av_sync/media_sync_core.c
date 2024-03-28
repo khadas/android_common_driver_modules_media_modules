@@ -765,6 +765,13 @@ static long mediasync_ins_init_syncinfo(mediasync_ins* pInstance) {
 	pInstance->mAudioFormat.format = -1;
 	pInstance->mAudioFormat.samplerate = -1;
 	pInstance->mCacheFrames = 0;
+
+	pInstance->mAudioSwitch.mOn = 0;
+	pInstance->mAudioSwitch.mSetByUser = 0;
+	pInstance->mAudioSwitch.mPts = -1;
+	pInstance->mAudioSwitch.mSystemTimeUs = -1;
+	pInstance->mAudioSwitch.mReserved[0] = 0;
+	pInstance->mAudioSwitch.mReserved[1] = 0;
 	return 0;
 }
 
@@ -4007,6 +4014,56 @@ long mediasync_ins_set_pcr_and_dmx_id(MediaSyncManager* pSyncManage, s32 sDemuxI
 	pInstance->mDemuxId = sDemuxId;
 	pInstance->mPcrPid = sPcrPid;
 	spin_unlock_irqrestore(&(pSyncManage->m_lock),flags);
+	return 0;
+}
+
+long mediasync_ins_set_audio_switch(MediaSyncManager* pSyncManage, mediasync_audio_switch audioSwitch) {
+
+	mediasync_ins* pInstance = NULL;
+	unsigned long flags = 0;
+	if (pSyncManage == NULL) {
+		return -1;
+	}
+
+	spin_lock_irqsave(&(pSyncManage->m_lock),flags);
+	pInstance = pSyncManage->pInstance;
+	if (pInstance == NULL) {
+		spin_unlock_irqrestore(&(pSyncManage->m_lock),flags);
+		return -1;
+	}
+
+	pInstance->mAudioSwitch.mOn = audioSwitch.mOn;
+	pInstance->mAudioSwitch.mSetByUser = audioSwitch.mSetByUser;
+	pInstance->mAudioSwitch.mPts = audioSwitch.mPts;
+	mediasync_pr_info(1, pInstance, "set audio switch:%d\n", audioSwitch.mOn);
+
+	pInstance->mStcParmUpdateCount++;
+
+	spin_unlock_irqrestore(&(pSyncManage->m_lock),flags);
+
+	return 0;
+}
+
+long mediasync_ins_get_audio_switch(MediaSyncManager* pSyncManage, mediasync_audio_switch* audioSwitch) {
+
+	mediasync_ins* pInstance = NULL;
+	unsigned long flags = 0;
+	if (pSyncManage == NULL) {
+		return -1;
+	}
+
+	spin_lock_irqsave(&(pSyncManage->m_lock),flags);
+	pInstance = pSyncManage->pInstance;
+	if (pInstance == NULL) {
+		spin_unlock_irqrestore(&(pSyncManage->m_lock),flags);
+		return -1;
+	}
+	audioSwitch->mOn = pInstance->mAudioSwitch.mOn;
+	audioSwitch->mSetByUser = pInstance->mAudioSwitch.mSetByUser;
+	audioSwitch->mPts = pInstance->mAudioSwitch.mPts;
+	audioSwitch->mSystemTimeUs = get_system_time_us();
+	spin_unlock_irqrestore(&(pSyncManage->m_lock),flags);
+
 	return 0;
 }
 

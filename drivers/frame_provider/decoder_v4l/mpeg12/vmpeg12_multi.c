@@ -106,7 +106,7 @@
 
 #define VF_POOL_SIZE        64
 #define DECODE_BUFFER_NUM_MAX 16
-#define DECODE_BUFFER_NUM_DEF 8
+#define DECODE_BUFFER_NUM_DEF 3
 #define MAX_BMMU_BUFFER_NUM (DECODE_BUFFER_NUM_MAX + 1)
 
 #define PUT_INTERVAL        (HZ/100)
@@ -132,11 +132,10 @@ static unsigned int radr;
 static unsigned int rval;
 
 static u32 without_display_mode;
-static u32 dynamic_buf_num_margin = 2;
+static u32 dynamic_buf_num_margin = 6;
 
-#define VMPEG12_DEV_NUM        9
-static unsigned int max_decode_instance_num = VMPEG12_DEV_NUM;
-static unsigned int max_process_time[VMPEG12_DEV_NUM];
+static unsigned int max_decode_instance_num = MAX_INSTANCE_MUN;
+static unsigned int max_process_time[MAX_INSTANCE_MUN];
 static unsigned int decode_timeout_val = 200;
 #define INCPTR(p) ptr_atomic_wrap_inc(&p)
 
@@ -1129,6 +1128,11 @@ static void user_data_ready_notify(struct vdec_mpeg12_hw_s *hw,
 			hw->ud_record[i].meta_info.vpts_valid = pts_valid;
 			hw->ud_record[i].meta_info.vpts = pts;
 
+			debug_print(DECODE_ID(hw), PRINT_FLAG_TIMEINFO,
+				"%s, pts %lld, pts_valid %d, poc %d\n",
+				__func__, pts, pts_valid,
+				hw->ud_record[i].meta_info.poc_number);
+
 			*p_userdata_rec = hw->ud_record[i];
 #ifdef DUMP_USER_DATA
 			dump_userdata_info(hw,
@@ -1507,7 +1511,7 @@ static void userdata_push_do_work(struct work_struct *work)
 	memset(&meta_info, 0, sizeof(meta_info));
 
 	meta_info.duration = hw->frame_dur;
-
+	meta_info.poc_number = READ_VREG(AV_SCRATCH_1) & 0x3ff;
 
 	reg = READ_VREG(AV_SCRATCH_J);
 	hw->userdata_wp_ctx = reg & (~(1<<16));
@@ -1635,10 +1639,11 @@ static void userdata_push_do_work(struct work_struct *work)
 	hw->ucode_cc_last_wp = cur_wp;
 
 	if (debug_enable & PRINT_FLAG_USERDATA_DETAIL)
-		pr_info("cur_wp:%d, rec_start:%d, rec_len:%d\n",
+		pr_info("cur_wp:%d, rec_start:%d, rec_len:%d, poc %d\n",
 			cur_wp,
 			pcur_ud_rec->rec_start,
-			pcur_ud_rec->rec_len);
+			pcur_ud_rec->rec_len,
+			pcur_ud_rec->meta_info.poc_number);
 
 #ifdef DUMP_USER_DATA
 	hw->reference[hw->cur_ud_idx] = reference;
@@ -2612,8 +2617,8 @@ static irqreturn_t vmpeg12_isr_thread_handler(struct vdec_s *vdec, int irq)
 		}
 
 		debug_print(DECODE_ID(hw), PRINT_FLAG_RUN_FLOW,
-			"mmpeg12: new_pic=%d, ind=%d, info=%x, seq=%x, offset=%d, poc %d\n",
-			hw->dec_num, index, info, seqinfo, offset, new_pic->poc);
+			"mmpeg12: new_pic=%d(%c), ind=%d, info=%x, seq=%x, offset=%d, poc %d\n",
+			hw->dec_num, GET_SLICE_TYPE(info), index, info, seqinfo, offset, new_pic->poc);
 
 		hw->frame_prog = info & PICINFO_PROG;
 
@@ -2699,8 +2704,8 @@ static irqreturn_t vmpeg12_isr_thread_handler(struct vdec_s *vdec, int irq)
 		}
 
 		debug_print(DECODE_ID(hw), PRINT_FLAG_RUN_FLOW,
-			"mmpeg12: disp_pic=%d(%c), ind=%d, offst=%x, pts=(%d,%lld,%lld)(%d)\n",
-			hw->disp_num, GET_SLICE_TYPE(info), index, disp_pic->offset,
+			"mmpeg12: disp_pic=%d(%c), poc %d, ind=%d, offst=%x, pts=(%d,%lld,%lld)(%d)\n",
+			hw->disp_num, GET_SLICE_TYPE(info), index, disp_pic->offset, disp_pic->poc,
 			disp_pic->pts, disp_pic->pts64,
 			disp_pic->timestamp, disp_pic->pts_valid);
 
@@ -2825,6 +2830,7 @@ static int notify_v4l_eos(struct vdec_s *vdec)
 			pr_info("[%d] MPEG2 isn't enough buff for notify eos.\n", ctx->id);
 			return 0;
 		}
+		usleep_range(500, 1000);
 	}
 
 	index = find_free_buffer(hw);

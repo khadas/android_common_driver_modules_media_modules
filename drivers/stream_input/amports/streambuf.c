@@ -49,7 +49,8 @@
 #define STBUF_WAIT_INTERVAL  (HZ/100)
 #define MEM_NAME "streambuf"
 
-void *fetchbuf = 0;
+#define FETCH_BUF "FETCHBUF"
+struct fetch fetchbuf;
 
 static s32 _stbuf_alloc(struct stream_buf_s *buf, bool is_secure)
 {
@@ -176,29 +177,59 @@ int stbuf_change_size(struct stream_buf_s *buf, int size, bool is_secure)
 
 int stbuf_fetch_init(void)
 {
-	if (NULL != fetchbuf)
+	pr_debug("[%s]fetchbuf:%llx-%px, fetchbuf_cnt:%d\n",
+			__func__, fetchbuf.paddr, fetchbuf.vaddr, atomic_read(&fetchbuf.ref));
+
+	if (fetchbuf.paddr) {
+		atomic_inc(&fetchbuf.ref);
 		return 0;
+	}
 
-	fetchbuf = (void *)__get_free_pages(GFP_KERNEL | GFP_DMA32,
-						get_order(FETCHBUF_SIZE));
-
-	if (!fetchbuf) {
+	fetchbuf.size = FETCHBUF_SIZE;
+	fetchbuf.paddr = codec_mm_alloc_for_dma(FETCH_BUF,
+					PAGE_ALIGN(fetchbuf.size) / PAGE_SIZE,
+					4 + PAGE_SHIFT,
+					CODEC_MM_FLAGS_CMA);
+	if (!fetchbuf.paddr) {
 		pr_info("%s: Can not allocate fetch working buffer\n",
 				__func__);
 		return -ENOMEM;
 	}
+	fetchbuf.vaddr = codec_mm_vmap(fetchbuf.paddr, fetchbuf.size);
+	if (!fetchbuf.vaddr) {
+		pr_info("%s: Can not vmap fetch working buffer\n",
+				__func__);
+		codec_mm_free_for_dma(FETCH_BUF, fetchbuf.paddr);
+		fetchbuf.paddr = 0;
+		fetchbuf.size = 0;
+		return -ENOMEM;
+	}
+
+	atomic_set(&fetchbuf.ref, 1);
+
 	return 0;
 }
 EXPORT_SYMBOL(stbuf_fetch_init);
 
 void stbuf_fetch_release(void)
 {
-	if (0 && fetchbuf) {
-		/* always don't free.for safe alloc/free*/
-		free_pages((unsigned long)fetchbuf, get_order(FETCHBUF_SIZE));
-		fetchbuf = 0;
+	atomic_dec(&fetchbuf.ref);
+	pr_debug("[%s]fetchbuf:%llx-%px, fetchbuf_cnt:%d\n",
+			__func__, fetchbuf.paddr, fetchbuf.vaddr, atomic_read(&fetchbuf.ref));
+
+	if (!atomic_read(&fetchbuf.ref)) {
+		if (fetchbuf.vaddr) {
+			codec_mm_unmap_phyaddr(fetchbuf.vaddr);
+			fetchbuf.vaddr = NULL;
+		}
+		if (fetchbuf.paddr) {
+			codec_mm_free_for_dma(FETCH_BUF, fetchbuf.paddr);
+			fetchbuf.paddr = 0;
+		}
+		pr_debug("[%s] fetchbuf free done\n", __func__);
 	}
 }
+EXPORT_SYMBOL(stbuf_fetch_release);
 
 static void _stbuf_timer_func(struct timer_list *arg)
 {

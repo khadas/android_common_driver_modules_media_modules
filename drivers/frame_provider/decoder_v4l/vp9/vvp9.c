@@ -141,16 +141,15 @@
 #endif
 
 #ifdef MULTI_INSTANCE_SUPPORT
-#define MAX_DECODE_INSTANCE_NUM     9
 #define MULTI_DRIVER_NAME "ammvdec_vp9_v4l"
 
-static unsigned int max_decode_instance_num = MAX_DECODE_INSTANCE_NUM;
-static unsigned int decode_frame_count[MAX_DECODE_INSTANCE_NUM];
-static unsigned int display_frame_count[MAX_DECODE_INSTANCE_NUM];
-static unsigned int max_process_time[MAX_DECODE_INSTANCE_NUM];
-static unsigned int run_count[MAX_DECODE_INSTANCE_NUM];
-static unsigned int input_empty[MAX_DECODE_INSTANCE_NUM];
-static unsigned int not_run_ready[MAX_DECODE_INSTANCE_NUM];
+static unsigned int max_decode_instance_num = MAX_INSTANCE_MUN;
+static unsigned int decode_frame_count[MAX_INSTANCE_MUN];
+static unsigned int display_frame_count[MAX_INSTANCE_MUN];
+static unsigned int max_process_time[MAX_INSTANCE_MUN];
+static unsigned int run_count[MAX_INSTANCE_MUN];
+static unsigned int input_empty[MAX_INSTANCE_MUN];
+static unsigned int not_run_ready[MAX_INSTANCE_MUN];
 
 static u32 decode_timeout_val = 200;
 static int start_decode_buf_level = 0x8000;
@@ -985,9 +984,9 @@ struct stage_buf_s {
 	unsigned short rpm[RPM_END - RPM_BEGIN];
 };
 
-static unsigned int not_run2_ready[MAX_DECODE_INSTANCE_NUM];
+static unsigned int not_run2_ready[MAX_INSTANCE_MUN];
 
-static unsigned int run2_count[MAX_DECODE_INSTANCE_NUM];
+static unsigned int run2_count[MAX_INSTANCE_MUN];
 
 #ifdef FB_DECODING_TEST_SCHEDULE
 u32 stage_buf_num; /* = 16;*/
@@ -1291,10 +1290,11 @@ static int is_oversize(int w, int h)
 
 	if ((get_cpu_major_id() < AM_MESON_CPU_MAJOR_ID_SM1) ||
 		(get_cpu_major_id() == AM_MESON_CPU_MAJOR_ID_T5M) ||
-		(get_cpu_major_id() == AM_MESON_CPU_MAJOR_ID_S7))
+		is_cpu_s7())
 		max = MAX_SIZE_4K;
 	else if ((get_cpu_major_id() == AM_MESON_CPU_MAJOR_ID_T5D) ||
-		(get_cpu_major_id() == AM_MESON_CPU_MAJOR_ID_TXHD2))
+		(get_cpu_major_id() == AM_MESON_CPU_MAJOR_ID_TXHD2) ||
+		is_cpu_s7_s805x3())
 		max = MAX_SIZE_2K;
 
 	if (w < 64 || h < 64)
@@ -7590,6 +7590,7 @@ static int notify_v4l_eos(struct vdec_s *vdec)
 			pr_err("[%d] VP9 isn't enough buff for notify eos.\n", ctx->id);
 			return 0;
 		}
+		usleep_range(500, 1000);
 	}
 
 	index = v4l_get_free_fb(hw);
@@ -10032,7 +10033,6 @@ static void vp9_work(struct work_struct *work)
 #endif
 
 		if (pbi->timeout && vdec_frame_based(vdec)) {
-			vp9_buf_ref_process_for_exception(pbi);
 			vdec_v4l_post_error_frame_event(ctx);
 			pbi->timeout = false;
 		}

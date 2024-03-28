@@ -234,7 +234,6 @@ Bit[10:8] - film_grain_params_ref_idx, For Write request
 #endif
 
 #ifdef MULTI_INSTANCE_SUPPORT
-#define MAX_DECODE_INSTANCE_NUM     9
 
 #ifdef DEBUG_USE_VP9_DEVICE_NAME
 #define MULTI_DRIVER_NAME "ammvdec_vp9_v4l"
@@ -253,15 +252,15 @@ static u32 suffix_aux_buf_size;
 #if (defined DEBUG_UCODE_LOG) || (defined DEBUG_CMD)
 #define UCODE_LOG_BUF_SIZE   (1024 * 1024)
 #endif
-static unsigned int max_decode_instance_num = MAX_DECODE_INSTANCE_NUM;
-static unsigned int decode_frame_count[MAX_DECODE_INSTANCE_NUM];
-static unsigned int display_frame_count[MAX_DECODE_INSTANCE_NUM];
-static unsigned int max_process_time[MAX_DECODE_INSTANCE_NUM];
-static unsigned int run_count[MAX_DECODE_INSTANCE_NUM];
-static unsigned int input_empty[MAX_DECODE_INSTANCE_NUM];
-static unsigned int not_run_ready[MAX_DECODE_INSTANCE_NUM];
+static unsigned int max_decode_instance_num = MAX_INSTANCE_MUN;
+static unsigned int decode_frame_count[MAX_INSTANCE_MUN];
+static unsigned int display_frame_count[MAX_INSTANCE_MUN];
+static unsigned int max_process_time[MAX_INSTANCE_MUN];
+static unsigned int run_count[MAX_INSTANCE_MUN];
+static unsigned int input_empty[MAX_INSTANCE_MUN];
+static unsigned int not_run_ready[MAX_INSTANCE_MUN];
 #ifdef AOM_AV1_MMU_DW
-static unsigned int dw_mmu_enable[MAX_DECODE_INSTANCE_NUM];
+static unsigned int dw_mmu_enable[MAX_INSTANCE_MUN];
 #endif
 
 static u32 decode_timeout_val = 600;
@@ -6414,6 +6413,7 @@ static int notify_v4l_eos(struct vdec_s *vdec)
 			pr_err("[%d] AV1 isn't enough buff for notify eos.\n", ctx->id);
 			return 0;
 		}
+		usleep_range(500, 1000);
 	}
 
 	index = v4l_get_free_fb(hw);
@@ -9733,7 +9733,6 @@ static void av1_work(struct work_struct *work)
 		hw->process_state = PROC_STATE_INIT;
 
 		if (hw->timeout && vdec_frame_based(vdec)) {
-			av1_buf_ref_process_for_exception(hw);
 			vdec_v4l_post_error_frame_event(ctx);
 			hw->timeout = false;
 		}

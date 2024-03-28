@@ -155,20 +155,19 @@
 #endif
 
 #ifdef MULTI_INSTANCE_SUPPORT
-#define MAX_DECODE_INSTANCE_NUM     9
 #define MULTI_DRIVER_NAME "ammvdec_vp9_fb_v4l"
 
-static unsigned int max_decode_instance_num = MAX_DECODE_INSTANCE_NUM;
-static unsigned int decode_frame_count[MAX_DECODE_INSTANCE_NUM];
-static unsigned int display_frame_count[MAX_DECODE_INSTANCE_NUM];
-static unsigned int max_process_time[MAX_DECODE_INSTANCE_NUM];
-static unsigned int run_count[MAX_DECODE_INSTANCE_NUM];
-static unsigned int input_empty[MAX_DECODE_INSTANCE_NUM];
-static unsigned int not_run_ready[MAX_DECODE_INSTANCE_NUM];
+static unsigned int max_decode_instance_num = MAX_INSTANCE_MUN;
+static unsigned int decode_frame_count[MAX_INSTANCE_MUN];
+static unsigned int display_frame_count[MAX_INSTANCE_MUN];
+static unsigned int max_process_time[MAX_INSTANCE_MUN];
+static unsigned int run_count[MAX_INSTANCE_MUN];
+static unsigned int input_empty[MAX_INSTANCE_MUN];
+static unsigned int not_run_ready[MAX_INSTANCE_MUN];
 
 #ifdef NEW_FB_CODE
-static unsigned int run_count_back[MAX_DECODE_INSTANCE_NUM];
-static unsigned int max_process_time_back[MAX_DECODE_INSTANCE_NUM];
+static unsigned int run_count_back[MAX_INSTANCE_MUN];
+static unsigned int max_process_time_back[MAX_INSTANCE_MUN];
 static unsigned int test_debug;
 static unsigned int test_dbg;
 static unsigned int test_schedule;
@@ -1246,9 +1245,9 @@ struct stage_buf_s {
 	unsigned short rpm[RPM_END - RPM_BEGIN];
 };
 
-static unsigned int not_run2_ready[MAX_DECODE_INSTANCE_NUM];
+static unsigned int not_run2_ready[MAX_INSTANCE_MUN];
 
-static unsigned int run2_count[MAX_DECODE_INSTANCE_NUM];
+static unsigned int run2_count[MAX_INSTANCE_MUN];
 
 #ifdef FB_DECODING_TEST_SCHEDULE
 u32 stage_buf_num; /* = 16;*/
@@ -2629,6 +2628,7 @@ static void fb_reset_core(struct vdec_s *vdec, u32 mask)
 #endif
 
 static void init_pic_list_hw(struct VP9Decoder_s *pbi);
+static void init_pic_list_hw_fb(struct VP9Decoder_s *pbi);
 
 static void update_hide_frame_timestamp(struct VP9Decoder_s *pbi)
 {
@@ -2694,7 +2694,9 @@ static int v4l_get_free_fb(struct VP9Decoder_s *pbi)
 
 	set_canvas(pbi, pic);
 #ifdef NEW_FB_CODE
-	if ((pbi->front_back_mode != 1) && (pbi->front_back_mode != 3))
+	if ((pbi->front_back_mode == 1) || (pbi->front_back_mode == 3))
+		init_pic_list_hw_fb(pbi);
+	else
 #endif
 		init_pic_list_hw(pbi);
 
@@ -5471,7 +5473,7 @@ void vp9_hw_init(struct VP9Decoder_s *pbi, int first_flag, int front_flag, int b
 			test_debug = 10;
 			return;
 		}
-	if (!efficiency_mode && front_flag)
+	if (!efficiency_mode && pbi->pic_list_init_done && front_flag)
 		init_pic_list_hw_fb(pbi);
 
 	if (front_flag) {
@@ -10440,6 +10442,7 @@ static int notify_v4l_eos(struct vdec_s *vdec)
 			pr_err("[%d] VP9 isn't enough buff for notify eos.\n", ctx->id);
 			return 0;
 		}
+		usleep_range(500, 1000);
 	}
 
 	index = v4l_get_free_fb(hw);
@@ -12159,7 +12162,9 @@ static irqreturn_t vvp9_isr_thread_fn(int irq, void *data)
 
 					init_pic_list(pbi);
 #ifdef NEW_FB_CODE
-					if ((pbi->front_back_mode != 1) && (pbi->front_back_mode != 3))
+					if ((pbi->front_back_mode == 1) || (pbi->front_back_mode == 3))
+						init_pic_list_hw_fb(pbi);
+					else
 #endif
 						init_pic_list_hw(pbi);
 
@@ -12204,7 +12209,8 @@ static irqreturn_t vvp9_isr_thread_fn(int irq, void *data)
 #ifdef NEW_FRONT_BACK_CODE
 		if (pbi->start_decoder_flag == 1 &&
 			(pbi->front_back_mode == 1 || pbi->front_back_mode == 3)) {
-			init_pic_list_hw_fb(pbi);
+			if (pbi->pic_list_init_done)
+				init_pic_list_hw_fb(pbi);
 
 			config_pic_size_fb(pbi, pbi->vp9_param.p.bit_depth);
 			if (cur_pic_config->pic_refs[0])
@@ -13455,7 +13461,6 @@ static void vp9_work_implement(struct VP9Decoder_s *pbi)
 		}
 #endif
 		if (pbi->timeout && vdec_frame_based(vdec)) {
-			vp9_buf_ref_process_for_exception(pbi);
 			vdec_v4l_post_error_frame_event(ctx);
 			pbi->timeout = false;
 		}

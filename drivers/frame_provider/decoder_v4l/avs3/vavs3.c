@@ -255,7 +255,6 @@ static int32_t g_WqMDefault8x8[64] = {
 #endif
 
 #ifdef MULTI_INSTANCE_SUPPORT
-#define MAX_DECODE_INSTANCE_NUM     12
 #define MULTI_DRIVER_NAME "ammvdec_avs3_v4l"
 
 #define lock_buffer(dec, flags) \
@@ -273,17 +272,17 @@ static int32_t g_WqMDefault8x8[64] = {
 u32 debug_mask = 0xffffffff;
 #define get_dbg_flag(dec) ((debug_mask & (1 << dec->index)) ? debug : 0)
 
-static unsigned int max_decode_instance_num = MAX_DECODE_INSTANCE_NUM;
-static unsigned int decode_frame_count[MAX_DECODE_INSTANCE_NUM];
-static unsigned int display_frame_count[MAX_DECODE_INSTANCE_NUM];
-static unsigned int max_process_time[MAX_DECODE_INSTANCE_NUM];
-static unsigned int run_count[MAX_DECODE_INSTANCE_NUM];
+static unsigned int max_decode_instance_num = MAX_INSTANCE_MUN;
+static unsigned int decode_frame_count[MAX_INSTANCE_MUN];
+static unsigned int display_frame_count[MAX_INSTANCE_MUN];
+static unsigned int max_process_time[MAX_INSTANCE_MUN];
+static unsigned int run_count[MAX_INSTANCE_MUN];
 #ifdef NEW_FB_CODE
-static unsigned int max_process_time_back[MAX_DECODE_INSTANCE_NUM];
-static unsigned int run_count_back[MAX_DECODE_INSTANCE_NUM];
+static unsigned int max_process_time_back[MAX_INSTANCE_MUN];
+static unsigned int run_count_back[MAX_INSTANCE_MUN];
 #endif
-static unsigned int input_empty[MAX_DECODE_INSTANCE_NUM];
-static unsigned int not_run_ready[MAX_DECODE_INSTANCE_NUM];
+static unsigned int input_empty[MAX_INSTANCE_MUN];
+static unsigned int not_run_ready[MAX_INSTANCE_MUN];
 
 static u32 over_decoder_shiftbytes = 0x80;
 
@@ -5858,6 +5857,7 @@ static int notify_v4l_eos(struct vdec_s *vdec)
 			avs3_print(dec, 0, "[%d] AVS3 isn't enough buff for notify eos.\n", ctx->id);
 			return 0;
 		}
+		usleep_range(500, 1000);
 	}
 
 	index = v4l_get_free_fb(dec);
@@ -9177,7 +9177,6 @@ static void avs3_work_implement(struct AVS3Decoder_s *dec)
 		decode_frame_count[dec->index] = dec->frame_count;
 
 		if (dec->timeout && vdec_frame_based(vdec)) {
-			avs3_buf_ref_process_for_exception(dec);
 			vdec_v4l_post_error_frame_event(ctx);
 			dec->timeout = false;
 		}

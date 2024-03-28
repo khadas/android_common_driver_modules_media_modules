@@ -96,7 +96,6 @@ typedef struct __attribute__((packed)) psinstance {
 typedef struct Pts_Server_Manage {
 	ptsserver_ins* pInstance;
 	struct mutex mListLock;
-	spinlock_t mListSlock;
 } PtsServerManage;
 
 typedef struct ps_alloc_para {

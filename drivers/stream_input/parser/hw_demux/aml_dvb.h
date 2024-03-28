@@ -294,7 +294,9 @@ struct aml_dvb {
 	struct aml_ts_input  ts[TS_IN_COUNT];
 	int s2p_total_count;
 	struct aml_s2p       s2p[S2P_COUNT];
+	int dmx_device_num;
 	struct aml_dmx       dmx[DMX_DEV_COUNT];
+	int ca_device_num;
 	struct aml_dsc       dsc[DSC_DEV_COUNT];
 	int async_fifo_total_count;
 	struct aml_asyncfifo asyncfifo[ASYNCFIFO_COUNT];

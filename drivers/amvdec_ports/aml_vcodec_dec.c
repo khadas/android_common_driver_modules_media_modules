@@ -574,6 +574,15 @@ static bool ge2d_needed(struct aml_vcodec_ctx *ctx, u32* mode)
 		return false;
 
 	if (is_cpu_t7()) {
+		int dw_mode = DM_YUV_ONLY;
+
+		if (ctx->output_pix_fmt == V4L2_PIX_FMT_H264 && !vdec_if_get_param(ctx, GET_PARAM_DW_MODE, &dw_mode)) {
+			if (dw_mode != DM_YUV_ONLY) {
+				pr_info("h264 mmu already exist,no need to use ge2d\n");
+				return false;
+			}
+		}
+
 		if ((ctx->output_pix_fmt != V4L2_PIX_FMT_H264) &&
 			(ctx->output_pix_fmt != V4L2_PIX_FMT_MPEG1) &&
 			(ctx->output_pix_fmt != V4L2_PIX_FMT_MPEG2) &&
@@ -1321,65 +1330,90 @@ ssize_t aml_buffer_status(struct aml_vcodec_ctx *ctx, char *buf)
 	return pbuf - buf;
 }
 
-void aml_compressed_info_show(struct aml_vcodec_ctx *ctx)
+ssize_t aml_compressed_info_show(struct aml_vcodec_ctx *ctx, char *buf)
 {
 	struct aml_q_data *outq = NULL;
 	struct vdec_pic_info pic;
 	int i;
+	int buf_size = PAGE_SIZE;
+	int tsize = 0;
 	u32 aerage_mem_size;
 	u32 max_avg_val_by_proup;
 	struct v4l_compressed_buffer_info *buffer = &ctx->compressed_buf_info;
 	u64 used_page_sum = buffer->used_page_sum;
+	char *pbuf = buf;
+	char *alloc_buf = NULL;
 
 	if (!(debug_mode & V4L_DEBUG_CODEC_COUNT))
-		return;
+		return 0;
 
 	if (vdec_if_get_param(ctx, GET_PARAM_PIC_INFO, &pic)) {
 		v4l_dbg(ctx, V4L_DEBUG_CODEC_ERROR,
 			"get pic info err\n");
-		return;
+		return 0;
+	}
+
+	if (!buf) {
+		alloc_buf = vzalloc(buf_size);
+		pbuf = alloc_buf;
+		if (!pbuf) {
+			v4l_dbg(ctx, V4L_DEBUG_CODEC_ERROR,
+				"Failed to alloc memory\n");
+			return 0;
+		}
 	}
 
 	outq = aml_vdec_get_q_data(ctx, V4L2_BUF_TYPE_VIDEO_OUTPUT);
-
-	pr_info("==== Show mmu buffer info ======== \n");
+	pbuf += sprintf(pbuf, "==== Show mmu buffer info ======== \n");
 	if (buffer->recycle_num == 0) {
-		pr_info("No valid info \n");
-		return;
+		pbuf += sprintf(pbuf, "No valid info \n");
+		goto out;
 	}
+
 	mutex_lock(&ctx->compressed_buf_info_lock);
-	v4l_dbg(ctx, V4L_DEBUG_CODEC_PRINFO,
-		"Fmt:%s, DW/TW:(%x, %x), Res:%dx%d, DPB:%d\n",
+	pbuf += sprintf(pbuf, "Fmt:%s, DW/TW:(%x, %x), Res:%dx%d, DPB:%d\n",
 		outq->fmt->name,
 		ctx->config.parm.dec.cfg.double_write_mode,
 		ctx->config.parm.dec.cfg.triple_write_mode,
 		pic.visible_width,
 		pic.visible_height,
 		ctx->dpb_size);
-
 	do_div(used_page_sum, buffer->recycle_num);
 	aerage_mem_size = ((u32)used_page_sum * 100) / PAGE_NUM_ONE_MB;
-	v4l_dbg(ctx, V4L_DEBUG_CODEC_PRINFO,
-		"mmu mem recycle num: %u, average used mmu mem %u.%u%u(MB)\n",
+	pbuf += sprintf(pbuf, "mmu mem recycle num: %u, average used mmu mem %u.%u%u(MB)\n",
 		buffer->recycle_num, aerage_mem_size / 100, (aerage_mem_size % 100) / 10, aerage_mem_size % 10);
 
 	max_avg_val_by_proup = buffer->max_avg_val_by_group * 100 / PAGE_NUM_ONE_MB;
-	v4l_dbg(ctx, V4L_DEBUG_CODEC_PRINFO,
-		"%d buffer in group, max avg used mem by group %u.%u%u(MB)\n", ctx->dpb_size,
+	pbuf += sprintf(pbuf, "%d buffer in group, max avg used mem by group %u.%u%u(MB)\n", ctx->dpb_size,
 		max_avg_val_by_proup / 100, (max_avg_val_by_proup % 100) / 10, max_avg_val_by_proup % 10);
 
-	v4l_dbg(ctx, V4L_DEBUG_CODEC_PRINFO,"mmu mem used distribution ratio\n");
+	pbuf += sprintf(pbuf, "mmu mem used distribution ratio\n");
 
+	if (alloc_buf) {
+		pr_info("%s\n", alloc_buf);
+		tsize = pbuf - alloc_buf;
+	}
 	for (i = 0; i < MAX_AVBC_BUFFER_SIZE; i++) {
 		u32 count = buffer->used_page_distributed_array[i];
-		//if (count)
-			v4l_dbg(ctx, V4L_DEBUG_CODEC_PRINFO,
-				"range %d [%dMB ~ %dMB] distribution num %d ratio %u%%\n",
-				i, i, i+1, count, (count * 100) / buffer->recycle_num);
+		pbuf += sprintf(pbuf, "range %d [%dMB ~ %dMB] distribution num %d ratio %u%%\n",
+			i, i, i+1, count, (count * 100) / buffer->recycle_num);
+
+		if (alloc_buf) {
+			pr_info("%s", alloc_buf + tsize);
+			tsize = pbuf - alloc_buf;
+		}
 	}
 
 	mutex_unlock(&ctx->compressed_buf_info_lock);
-	pr_info("==== End Show mmu buffer info ========");
+	pbuf += sprintf(pbuf, "==== End Show mmu buffer info ========\n");
+out:
+	if (alloc_buf) {
+		pr_info("%s", alloc_buf + tsize);
+		vfree(alloc_buf);
+		return 0;
+	}
+
+	return pbuf - buf;
 }
 
 static void reconfig_vpp_status(struct aml_vcodec_ctx *ctx)
@@ -3781,13 +3815,16 @@ static int vb2ops_vdec_buf_prepare(struct vb2_buffer *vb)
 
 	q_data = aml_vdec_get_q_data(ctx, vb->vb2_queue->type);
 
-	for (i = 0; i < q_data->fmt->num_planes; i++) {
-		if (vb2_plane_size(vb, i) < q_data->sizeimage[i] &&
-			vb2_plane_size(vb, i) != PAGE_SIZE) {
-			v4l_dbg(ctx, V4L_DEBUG_CODEC_ERROR,
-				"data will not fit into plane %d (%lu < %d)\n",
-				i, vb2_plane_size(vb, i),
-				q_data->sizeimage[i]);
+	if (!(ctx->enable_di_post && ctx->picinfo.field != V4L2_FIELD_NONE &&
+		is_vdec_core_fmt(ctx))) {
+		for (i = 0; i < q_data->fmt->num_planes; i++) {
+			if (vb2_plane_size(vb, i) < q_data->sizeimage[i] &&
+				vb2_plane_size(vb, i) != PAGE_SIZE) {
+				v4l_dbg(ctx, V4L_DEBUG_CODEC_ERROR,
+					"data will not fit into plane %d (%lu < %d)\n",
+					i, vb2_plane_size(vb, i),
+					q_data->sizeimage[i]);
+			}
 		}
 	}
 
@@ -3800,13 +3837,13 @@ void aml_alloc_buffer(struct aml_vcodec_ctx *ctx, int flag)
 
 	if (flag & DV_TYPE) {
 		for (i = 0; i < V4L_CAP_BUFF_MAX; i++) {
-			ctx->aux_infos.bufs[i].md_buf = vzalloc(MD_BUF_SIZE);
+			ctx->aux_infos.bufs[i].md_buf = aml_media_mem_alloc(MD_BUF_SIZE, GFP_KERNEL);
 			if (ctx->aux_infos.bufs[i].md_buf == NULL) {
 				v4l_dbg(ctx, V4L_DEBUG_CODEC_ERROR,
 					"v4l2 alloc %dth dv md buffer fail\n", i);
 			}
 
-			ctx->aux_infos.bufs[i].comp_buf = vzalloc(COMP_BUF_SIZE);
+			ctx->aux_infos.bufs[i].comp_buf = aml_media_mem_alloc(COMP_BUF_SIZE, GFP_KERNEL);
 			if (ctx->aux_infos.bufs[i].comp_buf == NULL) {
 				v4l_dbg(ctx, V4L_DEBUG_CODEC_ERROR,
 					"v4l2 alloc %dth dv comp buffer fail\n", i);
@@ -3816,7 +3853,7 @@ void aml_alloc_buffer(struct aml_vcodec_ctx *ctx, int flag)
 
 	if (flag & SEI_TYPE) {
 		for (i = 0; i < V4L_CAP_BUFF_MAX; i++) {
-			ctx->aux_infos.bufs[i].sei_buf = vzalloc(SEI_BUF_SIZE);
+			ctx->aux_infos.bufs[i].sei_buf = aml_media_mem_alloc(SEI_BUF_SIZE, GFP_KERNEL);
 			if (ctx->aux_infos.bufs[i].sei_buf) {
 				ctx->aux_infos.bufs[i].sei_size  = 0;
 				ctx->aux_infos.bufs[i].sei_state = 1;
@@ -3836,7 +3873,7 @@ void aml_alloc_buffer(struct aml_vcodec_ctx *ctx, int flag)
 
 	if (flag & HDR10P_TYPE) {
 		for (i = 0; i < V4L_CAP_BUFF_MAX; i++) {
-			ctx->aux_infos.bufs[i].hdr10p_buf = vzalloc(HDR10P_BUF_SIZE);
+			ctx->aux_infos.bufs[i].hdr10p_buf = aml_media_mem_alloc(HDR10P_BUF_SIZE, GFP_KERNEL);
 			if (ctx->aux_infos.bufs[i].hdr10p_buf) {
 				v4l_dbg(ctx, V4L_DEBUG_CODEC_EXINFO,
 					"v4l2 alloc %dth hdr10p buffer:%px\n",
@@ -3857,12 +3894,12 @@ void aml_free_buffer(struct aml_vcodec_ctx *ctx, int flag)
 	if (flag & DV_TYPE) {
 		for (i = 0; i < V4L_CAP_BUFF_MAX; i++) {
 			if (ctx->aux_infos.bufs[i].md_buf != NULL) {
-				vfree(ctx->aux_infos.bufs[i].md_buf);
+				aml_media_mem_free(ctx->aux_infos.bufs[i].md_buf);
 				ctx->aux_infos.bufs[i].md_buf = NULL;
 			}
 
 			if (ctx->aux_infos.bufs[i].comp_buf != NULL) {
-				vfree(ctx->aux_infos.bufs[i].comp_buf);
+				aml_media_mem_free(ctx->aux_infos.bufs[i].comp_buf);
 				ctx->aux_infos.bufs[i].comp_buf = NULL;
 			}
 		}
@@ -3874,7 +3911,7 @@ void aml_free_buffer(struct aml_vcodec_ctx *ctx, int flag)
 				v4l_dbg(ctx, V4L_DEBUG_CODEC_EXINFO,
 					"v4l2 free %dth aux buffer:%px\n",
 					i, ctx->aux_infos.bufs[i].sei_buf);
-				vfree(ctx->aux_infos.bufs[i].sei_buf);
+				aml_media_mem_free(ctx->aux_infos.bufs[i].sei_buf);
 				ctx->aux_infos.bufs[i].sei_state = 0;
 				ctx->aux_infos.bufs[i].sei_size = 0;
 				ctx->aux_infos.bufs[i].sei_buf = NULL;
@@ -3888,7 +3925,7 @@ void aml_free_buffer(struct aml_vcodec_ctx *ctx, int flag)
 				v4l_dbg(ctx, V4L_DEBUG_CODEC_EXINFO,
 					"v4l2 free %dth hdr10p buffer:%px\n",
 					i, ctx->aux_infos.bufs[i].hdr10p_buf);
-				vfree(ctx->aux_infos.bufs[i].hdr10p_buf);
+				aml_media_mem_free(ctx->aux_infos.bufs[i].hdr10p_buf);
 				ctx->aux_infos.bufs[i].hdr10p_buf = NULL;
 			}
 		}
@@ -4507,7 +4544,7 @@ static int vb2ops_vdec_buf_init(struct vb2_buffer *vb)
 					struct vb2_v4l2_buffer, vb2_buf);
 	struct aml_v4l2_buf *buf = container_of(vb2_v4l2,
 					struct aml_v4l2_buf, vb);
-	u32 size, phy_addr = 0;
+	u32 size;
 	int i;
 	int ret;
 
@@ -4529,16 +4566,6 @@ static int vb2ops_vdec_buf_init(struct vb2_buffer *vb)
 			strncpy(buf->mem_owner, owner, sizeof(buf->mem_owner));
 			buf->mem_owner[sizeof(buf->mem_owner) - 1] = '\0';
 			__putname(owner);
-
-			for (i = 0; i < vb->num_planes; i++) {
-				size = vb->planes[i].length;
-				phy_addr = vb2_dma_contig_plane_dma_addr(vb, i);
-				buf->mem[i] = v4l_reqbufs_from_codec_mm(buf->mem_owner,
-						phy_addr, size, vb->index);
-				v4l_dbg(ctx, V4L_DEBUG_CODEC_BUFMGR,
-						"OUT %c alloc, addr: %x, size: %u, idx: %u\n",
-						(i == 0? 'Y':'C'), phy_addr, size, vb->index);
-			}
 		} else if (vb->memory == VB2_MEMORY_DMABUF) {
 			unsigned int dw_mode = DM_YUV_ONLY;
 
@@ -4601,27 +4628,23 @@ static int vb2ops_vdec_buf_init(struct vb2_buffer *vb)
 static void vb2ops_vdec_buf_cleanup(struct vb2_buffer *vb)
 {
 	struct aml_vcodec_ctx *ctx = vb2_get_drv_priv(vb->vb2_queue);
-	struct vb2_v4l2_buffer *vb2_v4l2 = container_of(vb,
-					struct vb2_v4l2_buffer, vb2_buf);
-	struct aml_v4l2_buf *buf = container_of(vb2_v4l2,
-					struct aml_v4l2_buf, vb);
+	struct dma_buf *dbuf = vb->planes[0].dbuf;
 
 	v4l_dbg(ctx, V4L_DEBUG_CODEC_PROT, "%s, type: %d, idx: %d\n",
 		__func__, vb->vb2_queue->type, vb->index);
 
 	if (!V4L2_TYPE_IS_OUTPUT(vb->type)) {
-		if (vb->memory == VB2_MEMORY_MMAP) {
-			int i;
+		if (vb->memory == VB2_MEMORY_MMAP ||
+			((vb->memory == VB2_MEMORY_DMABUF) && !dmabuf_is_uvm(dbuf))) {
+			ulong key;
 
-			for (i = 0; i < vb->num_planes ; i++) {
-				v4l_dbg(ctx, V4L_DEBUG_CODEC_BUFMGR,
-					"OUT %c clean, addr: %lx, size: %u, idx: %u\n",
-					(i == 0)? 'Y':'C',
-					buf->mem[i]->phy_addr, buf->mem[i]->buffer_size, vb->index);
-				v4l_freebufs_back_to_codec_mm(buf->mem_owner, buf->mem[i]);
-				buf->mem[i] = NULL;
-			}
-			aml_buf_detach(&ctx->bm, vb2_dma_contig_plane_dma_addr(vb, 0));
+			if (vb->memory == VB2_MEMORY_DMABUF)
+				key = (ulong)vb->planes[0].dbuf;
+			else
+				key = vb2_dma_contig_plane_dma_addr(vb, 0);
+
+			aml_buf_put_dma(&ctx->bm);
+			aml_buf_detach(&ctx->bm, key);
 		}
 	}
 }
@@ -4738,7 +4761,7 @@ static void vb2ops_vdec_stop_streaming(struct vb2_queue *q)
 
 		aml_buf_reset(&ctx->bm);
 		aml_codec_connect(ctx->ada_ctx); /* for resolution change */
-		aml_compressed_info_show(ctx);
+		aml_compressed_info_show(ctx, NULL);
 		memset(&ctx->compressed_buf_info, 0, sizeof(ctx->compressed_buf_info));
 		ctx->buf_used_count = 0;
 	}
@@ -4912,7 +4935,7 @@ static int aml_vdec_try_s_v_ctrl(struct v4l2_ctrl *ctrl)
 			"set dma buf mode: %x\n", ctrl->val);
 	} else if (ctrl->id == AML_V4L2_GET_DECINFO_SET) {
 		memcpy(&ctx->dec_intf.dec_comm, ctrl->p_new.p, sizeof(struct vdec_common_s));
-		v4l_dbg(ctx, V4L_DEBUG_CODEC_PRINFO, "set dec info");
+		v4l_dbg(ctx, V4L_DEBUG_CODEC_PROT, "set dec info");
 	}
 	return 0;
 }

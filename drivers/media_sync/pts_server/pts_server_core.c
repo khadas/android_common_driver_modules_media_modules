@@ -176,7 +176,6 @@ long ptsserver_init(void) {
 	for (i = 0;i < MAX_INSTANCE_NUM;i++) {
 		vPtsServerInsList[i].pInstance = NULL;
 		mutex_init(&(vPtsServerInsList[i].mListLock));
-		spin_lock_init(&(vPtsServerInsList[i].mListSlock));
 	}
 	return 0;
 }
@@ -1589,15 +1588,14 @@ long ptsserver_ins_reset(s32 pServerInsId) {
 	ptsserver_ins* pInstance = NULL;
 	s32 index = get_index_from_ptsserver_id(pServerInsId);
 	pts_node *ptn = NULL;
-	ulong flags = 0;
 	if (index < 0 || index >= MAX_INSTANCE_NUM)
 		return -1;
 
 	vPtsServerIns = &(vPtsServerInsList[index]);
-	spin_lock_irqsave(&vPtsServerIns->mListSlock, flags);
+	mutex_lock(&vPtsServerIns->mListLock);
 	pInstance = vPtsServerIns->pInstance;
 	if (pInstance == NULL) {
-		spin_unlock_irqrestore(&vPtsServerIns->mListSlock, flags);
+		mutex_unlock(&vPtsServerIns->mListLock);
 		return -1;
 	}
 
@@ -1654,7 +1652,7 @@ long ptsserver_ins_reset(s32 pServerInsId) {
 	pInstance->mLastCheckinPts90k = 0;
 	pInstance->mListSize = 0;
 
-	spin_unlock_irqrestore(&vPtsServerIns->mListSlock, flags);
+	mutex_unlock(&vPtsServerIns->mListLock);
 	pr_info("%s ok \n",__func__);
 	return 0;
 }

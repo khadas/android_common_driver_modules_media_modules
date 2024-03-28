@@ -323,7 +323,6 @@ bit [3:2]: valid when bit1 == 0;
 #endif
 
 #ifdef MULTI_INSTANCE_SUPPORT
-#define MAX_DECODE_INSTANCE_NUM     9
 
 #define MULTI_DRIVER_NAME "ammvdec_av1_fb_v4l"
 
@@ -338,19 +337,19 @@ static u32 suffix_aux_buf_size;
 #if (defined DEBUG_UCODE_LOG) || (defined DEBUG_CMD)
 #define UCODE_LOG_BUF_SIZE   (1024 * 1024)
 #endif
-static unsigned int max_decode_instance_num = MAX_DECODE_INSTANCE_NUM;
-static unsigned int decode_frame_count[MAX_DECODE_INSTANCE_NUM];
-static unsigned int display_frame_count[MAX_DECODE_INSTANCE_NUM];
-static unsigned int max_process_time[MAX_DECODE_INSTANCE_NUM];
-static unsigned int run_count[MAX_DECODE_INSTANCE_NUM];
+static unsigned int max_decode_instance_num = MAX_INSTANCE_MUN;
+static unsigned int decode_frame_count[MAX_INSTANCE_MUN];
+static unsigned int display_frame_count[MAX_INSTANCE_MUN];
+static unsigned int max_process_time[MAX_INSTANCE_MUN];
+static unsigned int run_count[MAX_INSTANCE_MUN];
 #ifdef NEW_FB_CODE
-static unsigned int max_process_time_back[MAX_DECODE_INSTANCE_NUM];
-static unsigned int run_count_back[MAX_DECODE_INSTANCE_NUM];
+static unsigned int max_process_time_back[MAX_INSTANCE_MUN];
+static unsigned int run_count_back[MAX_INSTANCE_MUN];
 #endif
-static unsigned int input_empty[MAX_DECODE_INSTANCE_NUM];
-static unsigned int not_run_ready[MAX_DECODE_INSTANCE_NUM];
+static unsigned int input_empty[MAX_INSTANCE_MUN];
+static unsigned int not_run_ready[MAX_INSTANCE_MUN];
 #ifdef AOM_AV1_MMU_DW
-static unsigned int dw_mmu_enable[MAX_DECODE_INSTANCE_NUM];
+static unsigned int dw_mmu_enable[MAX_INSTANCE_MUN];
 #endif
 
 static u32 decode_timeout_val = 600;
@@ -1889,6 +1888,7 @@ static void	put_un_used_mv_bufs(struct AV1HW_s *hw)
 #endif
 
 static void init_pic_list_hw(struct AV1HW_s *pbi);
+static void init_pic_list_hw_fb(struct AV1HW_s *hw);
 
 static void update_hide_frame_timestamp(struct AV1HW_s *hw)
 {
@@ -1954,9 +1954,12 @@ static int v4l_get_free_fb(struct AV1HW_s *hw)
 
 	set_canvas(hw, pic);
 #ifdef NEW_FB_CODE
-	if ((hw->front_back_mode != 1) && (hw->front_back_mode != 3))
+		if ((hw->front_back_mode == 1) || (hw->front_back_mode == 3))
+			init_pic_list_hw_fb(hw);
+		else
 #endif
-		init_pic_list_hw(hw);
+			init_pic_list_hw(hw);
+
 
 	if (free_pic) {
 		if (frame_bufs[i].buf.use_external_reference_buffers) {
@@ -7130,6 +7133,7 @@ static int notify_v4l_eos(struct vdec_s *vdec)
 			pr_err("[%d] AV1 isn't enough buff for notify eos.\n", ctx->id);
 			return 0;
 		}
+		usleep_range(500, 1000);
 	}
 
 	index = v4l_get_free_fb(hw);
@@ -9690,8 +9694,13 @@ static irqreturn_t vav1_isr_thread_fn(int irq, void *data)
 					hw->used_buf_num = MAX_BUF_NUM;
 
 				init_pic_list(hw);
-				if ((hw->front_back_mode != 1) && (hw->front_back_mode != 3))
+#ifdef NEW_FB_CODE
+				if ((hw->front_back_mode == 1) || (hw->front_back_mode == 3))
+					init_pic_list_hw_fb(hw);
+				else
+#endif
 					init_pic_list_hw(hw);
+
 #ifndef MV_USE_FIXED_BUF
 				/*
 				if (init_mv_buf_list(hw) < 0) {
@@ -9800,7 +9809,8 @@ static irqreturn_t vav1_isr_thread_fn(int irq, void *data)
 	if ((hw->parallel_exe != 0) && efficiency_mode &&
 		hw->new_compressed_data &&
 		(hw->front_back_mode == 1 || hw->front_back_mode == 3)) {
-		init_pic_list_hw_fb(hw);
+		if (hw->pic_list_init_done)
+			init_pic_list_hw_fb(hw);
 
 		config_pic_size_fb(hw);
 		config_mc_buffer_fb(hw);
@@ -11038,7 +11048,6 @@ static void av1_work_implement(struct AV1HW_s *hw)
 		hw->process_state = PROC_STATE_INIT;
 
 		if (hw->timeout && vdec_frame_based(vdec)) {
-			av1_buf_ref_process_for_exception(hw);
 			vdec_v4l_post_error_frame_event(ctx);
 			hw->timeout = false;
 		}

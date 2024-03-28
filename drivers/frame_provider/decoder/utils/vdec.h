@@ -63,7 +63,11 @@ struct device *get_vdec_device(void);
 int vdec_module_init(void);
 void vdec_module_exit(void);
 
-#define MAX_INSTANCE_MUN  9
+#ifdef LIMIT_DECODE_INSTANCE
+#define MAX_INSTANCE_MUN     LIMIT_DECODE_INSTANCE
+#else
+#define MAX_INSTANCE_MUN     9
+#endif
 
 #define VDEC_DEBUG_SUPPORT
 

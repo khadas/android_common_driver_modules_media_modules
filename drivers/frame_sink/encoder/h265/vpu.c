@@ -1935,6 +1935,7 @@ static int vpu_dma_buffer_map(struct vpu_dma_cfg *cfg)
 {
 	int ret = -1;
 	int fd = -1;
+	struct page *page = NULL;
 	struct dma_buf *dbuf = NULL;
 	struct dma_buf_attachment *d_att = NULL;
 	struct sg_table *sg = NULL;
@@ -1967,6 +1968,8 @@ static int vpu_dma_buffer_map(struct vpu_dma_cfg *cfg)
 		enc_pr(LOG_ERROR, "failed to get dma sg\n");
 		goto map_attach_err;
 	}
+	page = sg_page(sg->sgl);
+	cfg->paddr = PFN_PHYS(page_to_pfn(page));
 	cfg->dbuf = dbuf;
 	cfg->attach = d_att;
 	cfg->vaddr = vaddr;
@@ -2015,23 +2018,17 @@ static void vpu_dma_buffer_unmap(struct vpu_dma_cfg *cfg)
 
 static int vpu_dma_buffer_get_phys(struct vpu_dma_cfg *cfg, unsigned long *addr)
 {
-	struct sg_table *sg_table;
-	struct page *page;
-	int ret;
-
-	ret = vpu_dma_buffer_map(cfg);
-	if (ret < 0) {
-		printk("vpu_dma_buffer_map failed\n");
-		return ret;
+	int ret = 0;
+	if (cfg->paddr == 0)
+	{ /* only mapp once */
+		ret = vpu_dma_buffer_map(cfg);
+		if (ret < 0) {
+			enc_pr(LOG_ERROR, "vpu_dma_buffer_map failed\n");
+			return ret;
+		}
 	}
-	if (cfg->sg) {
-		sg_table = cfg->sg;
-		page = sg_page(sg_table->sgl);
-		*addr = PFN_PHYS(page_to_pfn(page));
-		ret = 0;
-	}
-	enc_pr(LOG_INFO,"vpu_dma_buffer_get_phys\n");
-
+	if (cfg->paddr) *addr = cfg->paddr;
+	enc_pr(LOG_INFO,"vpu_dma_buffer_get_phys 0x%lx\n", cfg->paddr);
 	return ret;
 }
 

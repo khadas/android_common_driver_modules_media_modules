@@ -234,7 +234,6 @@ Bit[10:8] - film_grain_params_ref_idx, For Write request
 #endif
 
 #ifdef MULTI_INSTANCE_SUPPORT
-#define MAX_DECODE_INSTANCE_NUM     9
 
 #ifdef DEBUG_USE_VP9_DEVICE_NAME
 #define MULTI_DRIVER_NAME "ammvdec_vp9_v4l"
@@ -253,15 +252,15 @@ static u32 suffix_aux_buf_size;
 #if (defined DEBUG_UCODE_LOG) || (defined DEBUG_CMD)
 #define UCODE_LOG_BUF_SIZE   (1024 * 1024)
 #endif
-static unsigned int max_decode_instance_num = MAX_DECODE_INSTANCE_NUM;
-static unsigned int decode_frame_count[MAX_DECODE_INSTANCE_NUM];
-static unsigned int display_frame_count[MAX_DECODE_INSTANCE_NUM];
-static unsigned int max_process_time[MAX_DECODE_INSTANCE_NUM];
-static unsigned int run_count[MAX_DECODE_INSTANCE_NUM];
-static unsigned int input_empty[MAX_DECODE_INSTANCE_NUM];
-static unsigned int not_run_ready[MAX_DECODE_INSTANCE_NUM];
+static unsigned int max_decode_instance_num = MAX_INSTANCE_MUN;
+static unsigned int decode_frame_count[MAX_INSTANCE_MUN];
+static unsigned int display_frame_count[MAX_INSTANCE_MUN];
+static unsigned int max_process_time[MAX_INSTANCE_MUN];
+static unsigned int run_count[MAX_INSTANCE_MUN];
+static unsigned int input_empty[MAX_INSTANCE_MUN];
+static unsigned int not_run_ready[MAX_INSTANCE_MUN];
 #ifdef AOM_AV1_MMU_DW
-static unsigned int dw_mmu_enable[MAX_DECODE_INSTANCE_NUM];
+static unsigned int dw_mmu_enable[MAX_INSTANCE_MUN];
 #endif
 
 static u32 decode_timeout_val = 600;
@@ -968,9 +967,10 @@ static int is_oversize(int w, int h)
 
 	if ((get_cpu_major_id() < AM_MESON_CPU_MAJOR_ID_SM1) ||
 		(get_cpu_major_id() == AM_MESON_CPU_MAJOR_ID_T5M) ||
-		(get_cpu_major_id() == AM_MESON_CPU_MAJOR_ID_S7))
+		is_cpu_s7())
 		max = MAX_SIZE_4K;
-	else if (get_cpu_major_id() == AM_MESON_CPU_MAJOR_ID_T5D)
+	else if ((get_cpu_major_id() == AM_MESON_CPU_MAJOR_ID_T5D) ||
+		is_cpu_s7_s805x3())
 		max = MAX_SIZE_2K;
 
 	if (w < 64 || h < 64)
@@ -6588,6 +6588,7 @@ static int notify_v4l_eos(struct vdec_s *vdec)
 			pr_err("[%d] AV1 isn't enough buff for notify eos.\n", ctx->id);
 			return 0;
 		}
+		usleep_range(500, 1000);
 	}
 
 	index = v4l_get_free_fb(hw);
@@ -8753,6 +8754,11 @@ static irqreturn_t vav1_isr_thread_fn(int irq, void *data)
 					cfg.double_write_mode = 0x21;
 					av1_print(hw, 0, "AV1 has fg, original dw:0x%x use dw 0x21!\n",
 							hw->double_write_mode_original);
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 15, 0)
+					if (hw->film_grain_present && vdec_secure(hw_to_vdec(hw))) {
+						codec_mm_prealloc_tvp_pool();
+					}
+#endif
 					vdec_v4l_set_cfg_infos(ctx, &cfg);
 
 					if (hw->dw_frame_mmu_map_addr == NULL) {
@@ -9838,7 +9844,6 @@ static void av1_work(struct work_struct *work)
 		hw->process_state = PROC_STATE_INIT;
 
 		if (hw->timeout && vdec_frame_based(vdec)) {
-			av1_buf_ref_process_for_exception(hw);
 			vdec_v4l_post_error_frame_event(ctx);
 			hw->timeout = false;
 		}

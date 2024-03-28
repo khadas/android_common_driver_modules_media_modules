@@ -143,6 +143,7 @@ static int one_pack_multi_f_set_align_size = 0;
 #define VDEC_DBG_DUAL_CORE_DEBUG	(0x200)
 #define VDEC_DBG_STUCK_STATE_DEBUG (0x800)
 #define VDEC_DBG_ENABLE_CODE_RATE_DEBUG (0x1000)
+#define VDEC_DBG_AUTO_CLK_GATE_DISABLE (0x2000)
 
 #define FRAME_BASE_PATH_DI_V4LVIDEO_0 (29)
 #define FRAME_BASE_PATH_DI_V4LVIDEO_1 (30)
@@ -273,6 +274,7 @@ struct vdec_core_s {
 	u32 inst_cnt;
 	unsigned long run_flag;
 	int vf_duration;
+	struct vdec_s *last_run_vdec;
 };
 
 static struct vdec_core_s *vdec_core;
@@ -471,11 +473,11 @@ int vdec_data_get_index(ulong data, struct vdec_data_buf_s *vdata_buf)
 				(pdata->aux_buf_size < vdata_buf->aux_buf_size)) {
 
 				if (pdata->user_data_buf != NULL) {
-					vfree(pdata->user_data_buf);
+					kfree(pdata->user_data_buf);
 					pdata->user_data_buf = NULL;
 				}
 				if (pdata->hdr10p_data_buf != NULL) {
-					vfree(pdata->hdr10p_data_buf);
+					kfree(pdata->hdr10p_data_buf);
 					pdata->hdr10p_data_buf = NULL;
 				}
 				if (pdata->aux_data_buf != NULL) {
@@ -492,7 +494,7 @@ int vdec_data_get_index(ulong data, struct vdec_data_buf_s *vdata_buf)
 		if ((atomic_read(&pdata->use_count) == 0) &&
 			(pdata->alloc_flag == 0)) {
 			if (vdata_buf->alloc_policy & ALLOC_USER_BUF) {
-				pdata->user_data_buf = vzalloc(vdata_buf->user_buf_size);
+				pdata->user_data_buf = kzalloc(vdata_buf->user_buf_size, GFP_KERNEL);
 				if (pdata->user_data_buf == NULL) {
 					pr_debug("alloc %dth userdata failed\n", i);
 					return -1;
@@ -500,7 +502,7 @@ int vdec_data_get_index(ulong data, struct vdec_data_buf_s *vdata_buf)
 				pdata->user_buf_size = vdata_buf->user_buf_size;
 			}
 			if (vdata_buf->alloc_policy & ALLOC_HDR10P_BUF) {
-				pdata->hdr10p_data_buf = vzalloc(vdata_buf->hdr10p_buf_size);
+				pdata->hdr10p_data_buf = kzalloc(vdata_buf->hdr10p_buf_size, GFP_KERNEL);
 				if (pdata->hdr10p_data_buf == NULL) {
 					pr_debug("alloc %dth hdr10p failed\n", i);
 					return -1;
@@ -578,11 +580,11 @@ void vdec_data_release(struct codec_mm_s *mm, struct codec_mm_cb_s *cb)
 			struct vdec_data_s *rel_data = &vdata->data[i];
 
 			if (rel_data->user_data_buf != NULL) {
-				vfree(rel_data->user_data_buf);
+				kfree(rel_data->user_data_buf);
 				rel_data->user_data_buf = NULL;
 			}
 			if (rel_data->hdr10p_data_buf != NULL) {
-				vfree(rel_data->hdr10p_data_buf);
+				kfree(rel_data->hdr10p_data_buf);
 				rel_data->hdr10p_data_buf = NULL;
 			}
 			if (rel_data->aux_data_buf != NULL) {
@@ -2225,8 +2227,9 @@ u32 vdec_offset_prepare_input(struct vdec_s *vdec, u32 consume_byte, u32 data_of
 	data_size = res_byte;
 
 	if (input->target == VDEC_INPUT_TARGET_VLD) {
-		pr_debug("%s one_pack_multi_f_set_align_size:0x%x\n",
-			__func__, one_pack_multi_f_set_align_size);
+		if (vdec_get_debug_flags() & 0x10000000)
+			pr_info("%s one_pack_multi_f_set_align_size:0x%x\n",
+				__func__, one_pack_multi_f_set_align_size);
 
 		data_invalid = data_offset - round_down(data_offset, 0x40) + one_pack_multi_f_set_align_size;
 		if (data_invalid < 2) //fix dv cosunme more 1~2 byte, ensure contain start code
@@ -2588,6 +2591,11 @@ void vdec_save_input_context(struct vdec_s *vdec)
 #ifdef CONFIG_AMLOGIC_MEDIA_MULTI_DEC
 	vdec_profile(vdec, VDEC_PROFILE_EVENT_SAVE_INPUT, 0);
 #endif
+
+	if (vdec->next_status == VDEC_STATUS_DISCONNECTED) {
+		pr_debug("%s, disconnecting\n", __func__);
+		return;
+	}
 
 	if (input->target == VDEC_INPUT_TARGET_VLD)
 		WRITE_VREG(VLD_MEM_VIFIFO_CONTROL, 1<<15);
@@ -3183,7 +3191,8 @@ s32 vdec_init(struct vdec_s *vdec, int is_4k, bool is_v4l)
 	}
 
 	if ((get_cpu_major_id() == AM_MESON_CPU_MAJOR_ID_T5D ||
-		get_cpu_major_id() == AM_MESON_CPU_MAJOR_ID_TXHD2) &&
+		get_cpu_major_id() == AM_MESON_CPU_MAJOR_ID_TXHD2 ||
+		get_cpu_major_id() == AM_MESON_CPU_MAJOR_ID_G12A) &&
 		(vdec->frame_base_video_path == FRAME_BASE_PATH_DI_V4LVIDEO)) {
 		single_dmx_new_ptsserv = true;
 		p->use_vfm_path = 0;
@@ -3721,66 +3730,6 @@ static void vdec_userdata_ctx_release(struct vdec_s *vdec)
 	return;
 }
 
-static void vdec_wait_swap_busy(struct vdec_s *vdec)
-{
-	struct vdec_input_s *input;
-	ulong timeout = jiffies + HZ/80;
-
-	if (!vdec || (vdec->type != VDEC_TYPE_STREAM_PARSER))
-		return;
-
-	input = &vdec->input;
-	if (!input->swap_page_phys)
-		return;
-
-	if (input->target == VDEC_INPUT_TARGET_VLD) {
-		while (READ_VREG(VLD_MEM_SWAP_CTL) & (1<<7)) {  //wait write
-			if (time_after(jiffies, timeout)) {
-				pr_err("%s, timeout0 %x\n",
-					__func__, READ_VREG(VLD_MEM_SWAP_CTL));
-				break;
-			}
-		}
-		WRITE_VREG(VLD_MEM_SWAP_CTL, 0);
-
-		WRITE_VREG(VLD_MEM_SWAP_ADDR, input->swap_page_phys);
-		WRITE_VREG(VLD_MEM_SWAP_CTL, 1);  //read active
-
-		timeout = jiffies + HZ/80;
-		while (READ_VREG(VLD_MEM_SWAP_CTL) & (1<<7)) {
-			if (time_after(jiffies, timeout)) {
-				pr_err("%s, timeout1 %x\n",
-					__func__, READ_VREG(VLD_MEM_SWAP_CTL));
-				break;
-			}
-		}
-		WRITE_VREG(VLD_MEM_SWAP_CTL, 0);
-	} else if (input->target == VDEC_INPUT_TARGET_HEVC) {
-		/* swap busy ands wap wrrsp*/
-		while (READ_VREG(HEVC_STREAM_SWAP_CTRL) & ((1<<7) | (0xff << 24))) {
-			if (time_after(jiffies, timeout)) {
-				pr_err("%s, timeout_0 %x\n",
-					__func__, READ_VREG(HEVC_STREAM_SWAP_CTRL));
-				break;
-			}
-		}
-		WRITE_VREG(HEVC_STREAM_SWAP_CTRL, 0);
-
-		WRITE_VREG(HEVC_STREAM_SWAP_ADDR, input->swap_page_phys);
-		WRITE_VREG(HEVC_STREAM_SWAP_CTRL, 1);  //read active
-		/* swap busy ands wap wrrsp*/
-		timeout = jiffies + HZ/80;
-		while (READ_VREG(HEVC_STREAM_SWAP_CTRL) & ((1<<7) | (0xff << 24))) {
-			if (time_after(jiffies, timeout)) {
-				pr_err("%s, timeout_1 %x\n",
-					__func__, READ_VREG(HEVC_STREAM_SWAP_CTRL));
-				break;
-			}
-		}
-		WRITE_VREG(HEVC_STREAM_SWAP_CTRL, 0);
-	}
-}
-
 /* vdec_create/init/release/destroy are applied to both dual running decoders
  */
 void vdec_release(struct vdec_s *vdec)
@@ -3799,7 +3748,6 @@ void vdec_release(struct vdec_s *vdec)
 	/* When release, userspace systemctl need this duration 0 event */
 	vdec_frame_rate_uevent(0);
 	vdec_disconnect(vdec);
-	vdec_wait_swap_busy(vdec);
 
 	if (!vdec->disable_vfm && vdec->vframe_provider.name) {
 		if (!vdec_single(vdec)) {
@@ -4086,8 +4034,13 @@ static unsigned long vdec_schedule_mask(struct vdec_s *vdec,
 			return mask;
 		else
 			return 0;
-	} else
-		return mask & ~vdec->sched_mask & ~active_mask;
+	} else {
+		if ((vdec_core->vdec_combine_flag != 0) && (active_mask != 0)) {
+			return 0;
+		} else {
+			return mask & ~vdec->sched_mask & ~active_mask;
+		}
+	}
 }
 
 /*
@@ -4418,7 +4371,10 @@ unsigned long vdec_ready_to_run(struct vdec_s *vdec, unsigned long mask)
 #endif
 	if ((mask & ~CORE_MASK_HEVC_BACK) && check_run_ready) {
 		unsigned long tmp_mask = 0;
-		tmp_mask = vdec->run_ready(vdec, mask);
+		tmp_mask = vdec->run_ready(vdec, (mask & ~CORE_MASK_HEVC_BACK));
+		if (debug & 0x8)
+			pr_info("%s:%d run_ready tmp_mask = 0x%lx\n",
+				__func__, vdec->id, tmp_mask);
 		if (tmp_mask == 0xffffffff) {
 #ifdef CONFIG_AMLOGIC_MEDIA_MULTI_DEC
 			vdec_profile(vdec, VDEC_PROFILE_EVENT_WAIT_BACK_CORE, mask);
@@ -4438,6 +4394,13 @@ unsigned long vdec_ready_to_run(struct vdec_s *vdec, unsigned long mask)
 		if (ready_mask == (CORE_MASK_HEVC_BACK | CORE_MASK_HEVC))
 			ready_mask = CORE_MASK_HEVC_BACK;
 	}
+
+	if (!(vdec->core_mask & CORE_MASK_COMBINE) && (core->vdec_combine_flag != 0)) {
+		if ((ready_mask & CORE_MASK_HEVC_BACK) && (ready_mask & CORE_MASK_HEVC)) {
+			ready_mask &= CORE_MASK_HEVC_BACK;
+		}
+	}
+
 #ifdef VDEC_DEBUG_SUPPORT
 	if (ready_mask != mask)
 		inc_profi_count(ready_mask ^ mask, vdec->not_run_ready_count);
@@ -4521,6 +4484,9 @@ void vdec_prepare_run(struct vdec_s *vdec, unsigned long mask)
 
 static struct vdec_s * vdec_get_last_vdec(int format)
 {
+	if (vdec_core->vdec_combine_flag > 0)
+		return vdec_core->last_run_vdec;
+
 	if (format == VDEC_1)
 		return vdec_core->last_vdec;
 	else if (format == VDEC_HEVC)
@@ -4545,17 +4511,19 @@ static void check_core_run_flag(void)
 
 static void vdec_set_last_vdec(struct vdec_s *vdec, int format)
 {
-	if (vdec->core_mask & CORE_MASK_COMBINE) {
+	struct vdec_s *tmp_vdec = vdec_core->last_run_vdec;
+
+	if (format == VDEC_1)
 		vdec_core->last_vdec = vdec;
+	else if (format == VDEC_HEVC)
 		vdec_core->last_hevc = vdec;
+	else if (format == VDEC_HEVCB)
 		vdec_core->last_hevc_back = vdec;
-	} else {
-		if (format == VDEC_1)
-			vdec_core->last_vdec = vdec;
-		else if (format == VDEC_HEVC)
-			vdec_core->last_hevc = vdec;
-		else if (format == VDEC_HEVCB)
-			vdec_core->last_hevc_back = vdec;
+
+	vdec_core->last_run_vdec = vdec;
+	if (!(vdec->core_mask & CORE_MASK_COMBINE) && (vdec_core->vdec_combine_flag != 0)
+		&& (format == VDEC_HEVCB)) {
+		vdec_core->last_run_vdec = tmp_vdec;
 	}
 }
 
@@ -4664,6 +4632,8 @@ static int vdec_core_thread(void *data)
 						vdec_core->active_vdec = NULL;
 					if (vdec_core->active_hevc_back == vdec)
 						vdec_core->active_hevc_back = NULL;
+					if (vdec_core->last_run_vdec == vdec)
+						vdec_core->last_run_vdec = NULL;
 				}
 				if (core->last_vdec == vdec)
 					core->last_vdec = NULL;
@@ -4671,6 +4641,8 @@ static int vdec_core_thread(void *data)
 					core->last_hevc = NULL;
 				if (core->last_hevc_back == vdec)
 					core->last_hevc_back = NULL;
+				if (core->last_run_vdec == vdec)
+					core->last_run_vdec = NULL;
 				list_move(&vdec->list, &disconnecting_list);
 			}
 		}
@@ -4687,14 +4659,23 @@ static int vdec_core_thread(void *data)
 			}
 
 			/* elect next vdec to be scheduled */
-			vdec = vdec_get_last_vdec(i);
+			if (core->vdec_combine_flag != 0)
+				vdec = core->last_run_vdec;
+			else
+				vdec = vdec_get_last_vdec(i);
 			if (vdec) {
 				mutex_lock(&vdec_mutex);
 				vdec = list_entry(vdec->list.next, struct vdec_s, list);
 				list_for_each_entry_from(vdec, &core->connected_vdec_list, list) {
 					sched_mask = vdec_schedule_mask(vdec, core->sched_mask);
-					if (!(vdec->core_mask & CORE_MASK_COMBINE))
+
+					if (core->vdec_combine_flag == 0)
 						sched_mask &= (1 << i);
+
+					if (debug & 0x8)
+						pr_info("%s id:%d vdec sched_mask 0x%lx, sched_mask 0x%lx\n",
+							__func__, vdec->id, vdec->sched_mask, sched_mask);
+
 					if (!(sched_mask))
 						continue;
 
@@ -4714,11 +4695,22 @@ static int vdec_core_thread(void *data)
 				mutex_lock(&vdec_mutex);
 				/* search from beginning */
 				list_for_each_entry(vdec, &core->connected_vdec_list, list) {
+					struct vdec_s *last_vdec;
 					sched_mask = vdec_schedule_mask(vdec, core->sched_mask);
-					if (!(vdec->core_mask & CORE_MASK_COMBINE))
+
+					if (core->vdec_combine_flag == 0)
 						sched_mask &= (1 << i);
 
-					if (vdec == vdec_get_last_vdec(i)) {
+					if (debug & 0x8)
+						pr_info("%s id:%d vdec sched_mask 0x%lx, sched_mask 0x%lx\n",
+							__func__, vdec->id, vdec->sched_mask, sched_mask);
+
+					if (core->vdec_combine_flag != 0)
+						last_vdec = core->last_run_vdec;
+					else
+						last_vdec = vdec_get_last_vdec(i);
+
+					if (vdec == last_vdec) {
 						if (!sched_mask) {
 							vdec = NULL;
 							break;
@@ -4761,12 +4753,12 @@ static int vdec_core_thread(void *data)
 			while (sched_mask) {
 				i = __ffs(sched_mask);
 				set_bit(i, &vdec->active_mask);
+				vdec_set_last_vdec(vdec, i);
 				sched_mask &= ~(1 << i);
 			}
 
 			/* vdec's sched_mask is only set from core thread */
 			vdec->sched_mask |= mask;
-			vdec_set_last_vdec(vdec, i);
 			if (debug & 2) {
 				vdec->mc_loaded = 0;/*alway reload firmware*/
 				vdec->mc_back_loaded = 0;
@@ -5125,6 +5117,46 @@ void hevc_mmu_dma_check(struct vdec_s *vdec)
 }
 EXPORT_SYMBOL(hevc_mmu_dma_check);
 
+static void hevc_auto_clk_gate_disable(void)
+{
+	/* hevc top auto-cg disable */
+	WRITE_VREG(HEVC_ASSIST_AUTO_CG_DISABLE, 0xffffffff);
+
+	/* hevc parser auto-cg disable */
+	WRITE_VREG(HEVC_PARSER_CORE_CONTROL,
+			READ_VREG(HEVC_PARSER_CORE_CONTROL) | 0xffffc000);
+
+	/* hevc mpred auto-cg disable */
+	WRITE_VREG(HEVC_MPRED_CTRL1,
+			READ_VREG(HEVC_MPRED_CTRL1) | 0x1000000);
+	WRITE_VREG(HEVC_MPRED_CTRL9,
+			READ_VREG(HEVC_MPRED_CTRL9) | 0xfff0000);
+
+	/* hevc iqit auto-cg disable */
+	WRITE_VREG(HEVC_IQIT_CLK_RST_CTRL, (1 << 2));
+
+	/* hevc ipp auto-cg disable */
+	WRITE_VREG(HEVCD_IPP_DYNCLKGATE_CONFIG,
+			READ_VREG(HEVCD_IPP_DYNCLKGATE_CONFIG) | 0x4003ff00);
+
+	/* hevc mpp auto-cg disable */
+	WRITE_VREG(HEVCD_IPP_DYNCLKGATE_CONFIG,
+			READ_VREG(HEVCD_IPP_DYNCLKGATE_CONFIG) | 0xa00000ff);
+	WRITE_VREG(HEVCD_MPP_SUB_DYNCLKGATE_CONFIG, 0xffffffff);
+
+	/* hevc mcr auto-cg disable */
+	WRITE_VREG(HEVCD_IPP_DYNCLKGATE_CONFIG,
+			READ_VREG(HEVCD_IPP_DYNCLKGATE_CONFIG) | 0x17f00000);
+
+	/* hevc lpf auto-cg disable */
+	WRITE_VREG(HEVC_DBLK_CFGC,
+			READ_VREG(HEVC_DBLK_CFGC) | 0xffff0000);
+
+	/* hevc ow auto-cg disable */
+	WRITE_VREG(HEVC_SAO_CTRL1,
+			READ_VREG(HEVC_SAO_CTRL1) | 0x20000000);
+}
+
 void hevc_reset_core(struct vdec_s *vdec)
 {
 	int cpu_type = get_cpu_major_id();
@@ -5228,6 +5260,10 @@ void hevc_reset_core(struct vdec_s *vdec)
 		hevc_arb_ctrl(1, 0);
 	else
 		dec_dmc_port_ctrl(1, VDEC_INPUT_TARGET_HEVC);
+
+	if (vdec_get_debug() & VDEC_DBG_AUTO_CLK_GATE_DISABLE) {
+		hevc_auto_clk_gate_disable();
+	}
 }
 EXPORT_SYMBOL(hevc_reset_core);
 

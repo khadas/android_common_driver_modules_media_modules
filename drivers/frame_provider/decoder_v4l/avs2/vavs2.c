@@ -221,7 +221,6 @@ static int32_t g_WqMDefault8x8[64] = {
 #endif
 
 #ifdef MULTI_INSTANCE_SUPPORT
-#define MAX_DECODE_INSTANCE_NUM     12
 #define MULTI_DRIVER_NAME "ammvdec_avs2_v4l"
 
 #define lock_buffer(dec, flags) \
@@ -234,13 +233,13 @@ static u32 debug_mask = 0xffffffff;
 #define get_dbg_flag(dec) ((debug_mask & (1 << dec->index)) ? debug : 0)
 
 static unsigned int max_decode_instance_num
-				= MAX_DECODE_INSTANCE_NUM;
-static unsigned int decode_frame_count[MAX_DECODE_INSTANCE_NUM];
-static unsigned int display_frame_count[MAX_DECODE_INSTANCE_NUM];
-static unsigned int max_process_time[MAX_DECODE_INSTANCE_NUM];
-static unsigned int run_count[MAX_DECODE_INSTANCE_NUM];
-static unsigned int input_empty[MAX_DECODE_INSTANCE_NUM];
-static unsigned int not_run_ready[MAX_DECODE_INSTANCE_NUM];
+				= MAX_INSTANCE_MUN;
+static unsigned int decode_frame_count[MAX_INSTANCE_MUN];
+static unsigned int display_frame_count[MAX_INSTANCE_MUN];
+static unsigned int max_process_time[MAX_INSTANCE_MUN];
+static unsigned int run_count[MAX_INSTANCE_MUN];
+static unsigned int input_empty[MAX_INSTANCE_MUN];
+static unsigned int not_run_ready[MAX_INSTANCE_MUN];
 
 #ifdef G12A_BRINGUP_DEBUG
 static u32 decode_timeout_val = 200;
@@ -4773,6 +4772,7 @@ static int notify_v4l_eos(struct vdec_s *vdec)
 			pr_err("[%d] AVS2 isn't enough buff for notify eos.\n", ctx->id);
 			return 0;
 		}
+		usleep_range(500, 1000);
 	}
 
 	index = v4l_get_free_fb(dec);
@@ -6913,11 +6913,6 @@ static void avs2_work(struct work_struct *work)
 		decode_frame_count[dec->index] = dec->frame_count;
 		ctx->decoder_status_info.decoder_count++;
 
-		if (dec->timeout && vdec_frame_based(vdec)) {
-			avs2_buf_ref_process_for_exception(dec);
-			vdec_v4l_post_error_frame_event(ctx);
-			dec->timeout = false;
-		}
 		if ((pic != NULL) && (pic->error_mark) &&
 			(dec->dec_result == DEC_RESULT_DONE)) {
 			dec->gvs->error_frame_count++;

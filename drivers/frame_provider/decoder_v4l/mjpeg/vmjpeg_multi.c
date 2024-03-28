@@ -80,7 +80,7 @@
 
 #define VF_POOL_SIZE          64
 #define DECODE_BUFFER_NUM_MAX		16
-#define DECODE_BUFFER_NUM_DEF		4
+#define DECODE_BUFFER_NUM_DEF		1
 #define MAX_BMMU_BUFFER_NUM		DECODE_BUFFER_NUM_MAX
 
 #define DEFAULT_MEM_SIZE	(32*SZ_1M)
@@ -93,9 +93,8 @@ static u32 udebug_flag;
 
 static unsigned int radr;
 static unsigned int rval;
-#define VMJPEG_DEV_NUM        9
-static unsigned int max_decode_instance_num = VMJPEG_DEV_NUM;
-static unsigned int max_process_time[VMJPEG_DEV_NUM];
+static unsigned int max_decode_instance_num = MAX_INSTANCE_MUN;
+static unsigned int max_process_time[MAX_INSTANCE_MUN];
 static unsigned int decode_timeout_val = 200;
 static struct vframe_s *vmjpeg_vf_peek(void *);
 static struct vframe_s *vmjpeg_vf_get(void *);
@@ -107,7 +106,7 @@ static int notify_v4l_eos(struct vdec_s *vdec);
 static int pre_decode_buf_level = 0x800;
 static int start_decode_buf_level = 0x2000;
 static u32 without_display_mode;
-static u32 dynamic_buf_num_margin;
+static u32 dynamic_buf_num_margin = 6;
 static u32 run_ready_min_buf_num = 1;
 #undef pr_info
 #define pr_info pr_cont
@@ -1589,6 +1588,7 @@ static int notify_v4l_eos(struct vdec_s *vdec)
 			pr_err("[%d] MJPEG isn't enough buff for notify eos.\n", ctx->id);
 			return 0;
 		}
+		usleep_range(500, 1000);
 	}
 
 	index = find_free_buffer(hw);

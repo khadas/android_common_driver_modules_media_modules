@@ -430,7 +430,6 @@ static void dmxn_op_chan(int dmx, int ch, int(*op)(int, int), int ch_op)
 		dmxn_op_chan(_dmx, _chs, _set, DMX_CH_OP_CHANPROC); \
 	} while (0)
 
-#define NO_SUB
 #define SUB_BUF_DMX
 #define SUB_PARSER
 
@@ -494,6 +493,7 @@ static u32 first_audio_pts = 0;
 static int demux_skipbyte;
 static int tsfile_clkdiv = 5;
 static int asyncfifo_buf_len = ASYNCFIFO_BUFFER_SIZE_DEFAULT;
+static int sub_ttx_enable = 1;
 
 #define SF_DMX_ID 2
 #define SF_AFIFO_ID 1
@@ -540,7 +540,7 @@ static void section_buffer_watchdog_func(struct timer_list * timer)
 
 	spin_lock_irqsave(&dvb->slock, flags);
 
-	for (device_no = 0; device_no < DMX_DEV_COUNT; device_no++) {
+	for (device_no = 0; device_no < dvb->dmx_device_num; device_no++) {
 
 		dmx = &dvb->dmx[device_no];
 
@@ -1095,7 +1095,6 @@ static void process_section(struct aml_dmx *dmx)
 	}
 }
 
-#ifdef NO_SUB
 static void process_sub(struct aml_dmx *dmx)
 {
 
@@ -1169,7 +1168,6 @@ static void process_sub(struct aml_dmx *dmx)
 	}
 	WRITE_MPEG_REG(PARSER_SUB_RP, rd_ptr);
 }
-#endif
 
 static void process_pes(struct aml_dmx *dmx)
 {
@@ -1287,15 +1285,15 @@ static irqreturn_t dmx_irq_handler(int irq_number, void *para)
 
 	if (status & (1 << SECTION_BUFFER_READY))
 		process_section(dmx);
-#ifdef NO_SUB
-	if (status & (1 << SUB_PES_READY)) {
-		/*If the subtitle is set by tsdemux,
-		 *do not parser in demux driver.
-		 */
-		if (dmx->sub_chan == -1)
-			process_sub(dmx);
+	if (sub_ttx_enable) {
+		if (status & (1 << SUB_PES_READY)) {
+			/*If the subtitle is set by tsdemux,
+			 *do not parser in demux driver.
+			 */
+			if (dmx->sub_chan == -1)
+				process_sub(dmx);
+		}
 	}
-#endif
 	if (status & (1 << OTHER_PES_READY))
 		process_pes(dmx);
 	if (status & (1 << OM_CMD_READ_PENDING))
@@ -2107,7 +2105,7 @@ static void set_fec_core_sel (struct aml_dvb *dvb)
 {
 	int i;
 
-	for (i = 0; i < DMX_DEV_COUNT; i ++) {
+	for (i = 0; i < dvb->dmx_device_num; i ++) {
 		int set = 0;
 		u32 ctrl = DMX_READ_REG(i, FEC_INPUT_CONTROL);
 
@@ -2461,7 +2459,6 @@ static int dmx_alloc_sec_buffer(struct aml_dmx *dmx)
 	return 0;
 }
 
-#ifdef NO_SUB
 /*Set subtitle buffer*/
 static int dmx_alloc_sub_buffer(struct aml_dvb *dvb, struct aml_dmx *dmx)
 {
@@ -2528,7 +2525,6 @@ static int dmx_alloc_sub_buffer_shared(struct aml_dvb *dvb)
 	return 0;
 }
 #endif
-#endif /*NO_SUB */
 
 /*Set PES buffer*/
 static int dmx_alloc_pes_buffer(struct aml_dvb *dvb, struct aml_dmx *dmx)
@@ -2889,6 +2885,14 @@ static int dmx_init(struct aml_dmx *dmx)
 		pr_inf("%s: 0x%x\n", buf, value);
 		asyncfifo_buf_len = value;
 	}
+	memset(buf, 0, 32);
+	snprintf(buf, sizeof(buf), "sub_ttx");
+	ret = of_property_read_u32(dvb->pdev->dev.of_node, buf, &value);
+	if (!ret) {
+		pr_inf("%s: 0x%x\n", buf, value);
+		sub_ttx_enable = value;
+	}
+
 	/*Register irq handlers */
 	if (dmx->dmx_irq != -1) {
 		pr_dbg("request irq\n");
@@ -2906,14 +2910,14 @@ static int dmx_init(struct aml_dmx *dmx)
 	/*Allocate buffer */
 	if (dmx_alloc_sec_buffer(dmx) < 0)
 		return -1;
-#ifdef NO_SUB
+	if (sub_ttx_enable) {
 #ifdef SUB_BUF_SHARED
 	if (dmx_alloc_sub_buffer_shared(dvb) < 0)
 		return -1;
 #endif
 	if (dmx_alloc_sub_buffer(dvb, dmx) < 0)
 		return -1;
-#endif
+	}
 #ifdef PES_BUF_SHARED
 	if (dmx_alloc_pes_buffer_shared(dvb) < 0)
 		return -1;
@@ -2967,7 +2971,7 @@ static int dmx_deinit(struct aml_dmx *dmx)
 		dmx->sec_pages = 0;
 		dmx->sec_pages_map = 0;
 	}
-#ifdef NO_SUB
+	if (sub_ttx_enable) {
 #ifdef SUB_BUF_DMX
 #ifdef SUB_BUF_SHARED
 	if (dvb->sub_pages) {
@@ -2986,7 +2990,7 @@ static int dmx_deinit(struct aml_dmx *dmx)
 	}
 #endif
 #endif
-#endif
+}
 #ifdef PES_BUF_SHARED
 	if (dvb->pes_pages) {
 		dma_unmap_single(dvb->dev, dvb->pes_pages_map,
@@ -3863,7 +3867,7 @@ static void reset_async_fifos(struct aml_dvb *dvb)
 
 	struct aml_asyncfifo *afifo = NULL;
 
-	for (j = 0; j < DMX_DEV_COUNT; j++) {
+	for (j = 0; j < dvb->dmx_device_num; j++) {
 		if (!dvb->dmx[j].init)
 			continue;
 
@@ -3989,7 +3993,7 @@ void dmx_reset_hw_ex(struct aml_dvb *dvb, int reset_irq)
 	memset(&pcr_num, 0, sizeof(pcr_num));
 	memset(&pcr_dmx, 0, sizeof(pcr_dmx));
 
-	for (id = 0; id < DMX_DEV_COUNT; id++) {
+	for (id = 0; id < dvb->dmx_device_num; id++) {
 		if (!dvb->dmx[id].init)
 			continue;
 		pcr_reg[id] = DMX_READ_REG(id, PCR90K_CTL);
@@ -4008,7 +4012,7 @@ void dmx_reset_hw_ex(struct aml_dvb *dvb, int reset_irq)
 		del_timer_sync(&dvb->watchdog_timer);
 #endif
 	/*RESET_TOP will clear the dsc pid , save all dsc pid that setting in TA*/
-	for (id = 0; id < DSC_DEV_COUNT; id++) {
+	for (id = 0; id < dvb->ca_device_num; id++) {
 		struct aml_dsc *dsc = &dvb->dsc[id];
 		int n;
 
@@ -4023,7 +4027,7 @@ void dmx_reset_hw_ex(struct aml_dvb *dvb, int reset_irq)
 
 	WRITE_MPEG_REG(RESET1_REGISTER, RESET_DEMUXSTB);
 
-	for (id = 0; id < DMX_DEV_COUNT; id++) {
+	for (id = 0; id < dvb->dmx_device_num; id++) {
 		times = 0;
 		while (times++ < 1000000) {
 			if (!(DMX_READ_REG(id, OM_CMD_STATUS) & 0x01))
@@ -4034,7 +4038,7 @@ void dmx_reset_hw_ex(struct aml_dvb *dvb, int reset_irq)
 	WRITE_MPEG_REG(STB_TOP_CONFIG, 0);
 	WRITE_MPEG_REG(STB_S2P2_CONFIG, 0);
 
-	for (id = 0; id < DMX_DEV_COUNT; id++) {
+	for (id = 0; id < dvb->dmx_device_num; id++) {
 		u32 version, data;
 
 		if (!dvb->dmx[id].init)
@@ -4066,7 +4070,7 @@ void dmx_reset_hw_ex(struct aml_dvb *dvb, int reset_irq)
 
 	stb_enable(dvb);
 
-	for (id = 0; id < DMX_DEV_COUNT; id++) {
+	for (id = 0; id < dvb->dmx_device_num; id++) {
 		struct aml_dmx *dmx = &dvb->dmx[id];
 		int n;
 		unsigned long addr;
@@ -4102,7 +4106,7 @@ void dmx_reset_hw_ex(struct aml_dvb *dvb, int reset_irq)
 					(SEC_GRP_LEN_2 << 8) |
 					(SEC_GRP_LEN_3 << 12));
 		}
-#ifdef NO_SUB
+		if (sub_ttx_enable) {
 #ifndef SUB_PARSER
 		if (dmx->sub_pages) {
 			addr = virt_to_phys((void *)dmx->sub_pages);
@@ -4111,7 +4115,7 @@ void dmx_reset_hw_ex(struct aml_dvb *dvb, int reset_irq)
 				      (dmx->sub_buf_len >> 3) - 1);
 		}
 #endif
-#endif
+		}
 		if (dmx->pes_pages) {
 			addr = virt_to_phys((void *)dmx->pes_pages);
 			DMX_WRITE_REG(dmx->id, OB_START, addr >> 12);
@@ -4121,7 +4125,7 @@ void dmx_reset_hw_ex(struct aml_dvb *dvb, int reset_irq)
 
 		for (n = 0; n < CHANNEL_COUNT; n++) {
 			{
-#ifdef NO_SUB
+				if (sub_ttx_enable) {
 #ifdef SUB_PARSER
 				/*
 				  check if subtitle channel was running,
@@ -4134,7 +4138,7 @@ void dmx_reset_hw_ex(struct aml_dvb *dvb, int reset_irq)
 						== (SUB_PACKET << PID_TYPE))
 					set_subtitle_pes_buffer(dmx);
 #endif
-#endif
+				}
 				{
 					u32 v = dmx_get_chan_target(dmx, n);
 					if (v != 0xFFFF &&
@@ -4170,7 +4174,7 @@ void dmx_reset_hw_ex(struct aml_dvb *dvb, int reset_irq)
 		DMX_WRITE_REG(id, PCR_DEMUX, pcr_dmx[id]);
 	}
 
-	for (id = 0; id < DSC_DEV_COUNT; id++) {
+	for (id = 0; id < dvb->ca_device_num; id++) {
 		struct aml_dsc *dsc = &dvb->dsc[id];
 		int n;
 
@@ -4233,7 +4237,7 @@ void dmx_reset_dmx_hw_ex_unlock(struct aml_dvb *dvb, struct aml_dmx *dmx,
 	}
 #endif
 #if 0
-	for (id = 0; id < DSC_DEV_COUNT; id++)
+	for (id = 0; id < dvb->ca_device_num; id++)
 	{
 		struct aml_dsc *dsc = &dvb->dsc[id];
 		int n;
@@ -4332,7 +4336,7 @@ void dmx_reset_dmx_hw_ex_unlock(struct aml_dvb *dvb, struct aml_dmx *dmx,
 					(SEC_GRP_LEN_2 << 8) |
 					(SEC_GRP_LEN_3 << 12));
 		}
-#ifdef NO_SUB
+		if (sub_ttx_enable) {
 #ifndef SUB_PARSER
 		if (dmx->sub_pages) {
 			addr = virt_to_phys((void *)dmx->sub_pages);
@@ -4341,7 +4345,7 @@ void dmx_reset_dmx_hw_ex_unlock(struct aml_dvb *dvb, struct aml_dmx *dmx,
 				      (dmx->sub_buf_len >> 3) - 1);
 		}
 #endif
-#endif
+		}
 		if (dmx->pes_pages) {
 			addr = virt_to_phys((void *)dmx->pes_pages);
 			DMX_WRITE_REG(dmx->id, OB_START, addr >> 12);
@@ -4351,7 +4355,7 @@ void dmx_reset_dmx_hw_ex_unlock(struct aml_dvb *dvb, struct aml_dmx *dmx,
 
 		for (n = 0; n < CHANNEL_COUNT; n++) {
 			{
-#ifdef NO_SUB
+			if (sub_ttx_enable) {
 #ifdef SUB_PARSER
 				/*
 				  check if subtitle channel was running,
@@ -4364,7 +4368,7 @@ void dmx_reset_dmx_hw_ex_unlock(struct aml_dvb *dvb, struct aml_dmx *dmx,
 						== (SUB_PACKET << PID_TYPE))
 					set_subtitle_pes_buffer(dmx);
 #endif
-#endif
+				}
 				{
 					u32 v = dmx_get_chan_target(dmx, n);
 					if (v != 0xFFFF &&
@@ -4406,7 +4410,7 @@ void dmx_reset_dmx_hw_ex_unlock(struct aml_dvb *dvb, struct aml_dmx *dmx,
 	{
 		int id;
 
-		for (id = 0; id < DSC_DEV_COUNT; id++) {
+		for (id = 0; id < dvb->ca_device_num; id++) {
 			struct aml_dsc *dsc = &dvb->dsc[id];
 			int n;
 
@@ -5683,7 +5687,7 @@ int aml_dmx_set_skipbyte(struct aml_dvb *dvb, int skipbyte)
 int aml_dmx_set_demux(struct aml_dvb *dvb, int id)
 {
 	aml_stb_hw_set_source(dvb, DMX_SOURCE_DVR0);
-	if (id < DMX_DEV_COUNT) {
+	if (id < dvb->dmx_device_num) {
 		struct aml_dmx *dmx = &dvb->dmx[id];
 
 		aml_dmx_hw_set_source((struct dmx_demux *)dmx,
