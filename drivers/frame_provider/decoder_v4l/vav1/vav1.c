@@ -967,7 +967,8 @@ static int is_oversize(int w, int h)
 
 	if ((get_cpu_major_id() < AM_MESON_CPU_MAJOR_ID_SM1) ||
 		(get_cpu_major_id() == AM_MESON_CPU_MAJOR_ID_T5M) ||
-		is_cpu_s7())
+		is_cpu_s7() ||
+		(get_cpu_major_id() == AM_MESON_CPU_MAJOR_ID_S7D))
 		max = MAX_SIZE_4K;
 	else if ((get_cpu_major_id() == AM_MESON_CPU_MAJOR_ID_T5D) ||
 		is_cpu_s7_s805x3())
@@ -6519,13 +6520,11 @@ void av1_raw_write_image(AV1Decoder *pbi, PIC_BUFFER_CONFIG *sd)
 			}
 		}
 		mutex_unlock(&hw->fence_mutex);
-		if (signed_count != 0) {
-			for (i = 0; i < signed_count; i++) {
-				if (!signed_fence[i])
-					continue;
-				buf = (struct aml_buf *)signed_fence[i]->v4l_mem_handle;
-				av1_recycle_dec_resource(hw, buf);
-			}
+		for (i = 0; i < signed_count; i++) {
+			if (!signed_fence[i])
+				continue;
+			buf = (struct aml_buf *)signed_fence[i]->v4l_mem_handle;
+			av1_recycle_dec_resource(hw, buf);
 		}
 	} else {
 		prepare_display_buf((struct AV1HW_s *)(pbi->private_data), sd);

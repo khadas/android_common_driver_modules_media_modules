@@ -212,7 +212,7 @@ int code_rate_avg_threshold_hi = 130;
 int rate_time_avg_threshold_hi = 16700;
 int rate_time_avg_threshold_lo = 16700;
 
-static int mmu_copy_enable;
+static int mmu_copy_enable = 1;
 
 st_userdata userdata;
 
@@ -275,6 +275,7 @@ struct vdec_core_s {
 	unsigned long run_flag;
 	int vf_duration;
 	struct vdec_s *last_run_vdec;
+	bool decoder_mmu_copy_flag;
 };
 
 static struct vdec_core_s *vdec_core;
@@ -605,6 +606,8 @@ EXPORT_SYMBOL(vdec_data_release);
 
 dbg_data_wr debug_port_func_data_wr;
 dbg_info_up debug_port_func_info_up;
+EXPORT_SYMBOL(debug_port_func_data_wr);
+EXPORT_SYMBOL(debug_port_func_info_up);
 
 void vdec_debug_port_register(dbg_data_wr data_write, dbg_info_up info_update)
 {
@@ -969,7 +972,8 @@ static void dec_dmc_port_ctrl(bool dmc_on, u32 target)
 	unsigned int cpu_type = get_cpu_major_id();
 
 	if (target == VDEC_INPUT_TARGET_VLD) {
-		if (cpu_type == AM_MESON_CPU_MAJOR_ID_S7) {
+		if ((cpu_type == AM_MESON_CPU_MAJOR_ID_S7) ||
+			(cpu_type == AM_MESON_CPU_MAJOR_ID_S7D)) {
 			mask = (1 << 8);
 		} else {
 			mask = (1 << 13);	/*bit13: DOS VDEC interface*/
@@ -977,7 +981,8 @@ static void dec_dmc_port_ctrl(bool dmc_on, u32 target)
 				mask = (1 << 21);
 		}
 	} else if (target == VDEC_INPUT_TARGET_HEVC) {
-		if (cpu_type == AM_MESON_CPU_MAJOR_ID_S7) {
+		if ((cpu_type == AM_MESON_CPU_MAJOR_ID_S7) ||
+			(cpu_type == AM_MESON_CPU_MAJOR_ID_S7D)) {
 			mask = (1 << 7);
 		} else {
 			mask = (1 << 4); /*hevc*/
@@ -1035,6 +1040,9 @@ static void dec_dmc_port_ctrl(bool dmc_on, u32 target)
 			break;
 		case AM_MESON_CPU_MAJOR_ID_S7:
 			sts_reg_addr = 0xcc;
+			break;
+		case AM_MESON_CPU_MAJOR_ID_S7D:
+			sts_reg_addr = 0xcf;
 			break;
 		default:
 			sts_reg_addr = DMC_CHAN_STS;
@@ -1279,6 +1287,12 @@ int vdec_set_trickmode(struct vdec_s *vdec, unsigned long trickmode)
 	return -1;
 }
 EXPORT_SYMBOL(vdec_set_trickmode);
+
+void vdec_set_mmu_copy_flag(bool need_copy)
+{
+	vdec_core->decoder_mmu_copy_flag = need_copy;
+}
+EXPORT_SYMBOL(vdec_set_mmu_copy_flag);
 
 int vdec_set_isreset(struct vdec_s *vdec, int isreset)
 {
@@ -3179,7 +3193,11 @@ s32 vdec_init(struct vdec_s *vdec, int is_4k, bool is_v4l)
 		vdec_enable_DMC(vdec);
 	p->cma_dev = vdec_core->cma_dev;
 
-	vdec_canvas_port_register(vdec);
+	r = vdec_canvas_port_register(vdec);
+	if (r < 0) {
+		pr_err("fail to register vdec canvas port\n");
+		return r;
+	}
 
 	p->vdec_fps_detec = vdec_fps_detec;
 	/* todo */
@@ -3512,14 +3530,12 @@ s32 vdec_init(struct vdec_s *vdec, int is_4k, bool is_v4l)
 			FRAME_BASE_PATH_DTV_TUNNEL_MEDIASYNC_MODE) {
 			if (mediasync_add_di)
 				snprintf(vdec->vfm_map_chain,
-					VDEC_MAP_NAME_SIZE, "%s %s",
-					vdec->vf_provider_name,
-					"deinterlace mediasync.0 amvideo");
+					VDEC_MAP_NAME_SIZE, "%s deinterlace mediasync.0 amvideo",
+					vdec->vf_provider_name);
 			else
 				snprintf(vdec->vfm_map_chain,
-					VDEC_MAP_NAME_SIZE, "%s %s",
-					vdec->vf_provider_name,
-					"mediasync.0 amvideo");
+					VDEC_MAP_NAME_SIZE, "%s mediasync.0 amvideo",
+					vdec->vf_provider_name);
 
 			snprintf(vdec->vfm_map_id, VDEC_MAP_NAME_SIZE,
 					"vdec-map-%d", vdec->id);
@@ -3796,6 +3812,7 @@ void vdec_release(struct vdec_s *vdec)
 	if (atomic_read(&vdec_core->vdec_nr) == 1) {
 		vdec_disable_DMC(vdec);
 		vdec_set_vf_dur(0);
+		vdec_set_mmu_copy_flag(false);
 	}
 
 	platform_device_unregister(vdec->dev);
@@ -5247,6 +5264,7 @@ void hevc_reset_core(struct vdec_s *vdec)
 				READ_RESET_REG((P_RESETCTRL_RESET6_LEVEL)) | ((1<<1)));
 		break;
 	case AM_MESON_CPU_MAJOR_ID_S7:
+	case AM_MESON_CPU_MAJOR_ID_S7D:
 		WRITE_RESET_REG(P_RESETCTRL_RESET5_LEVEL,
 				READ_RESET_REG(P_RESETCTRL_RESET5_LEVEL) & (~(1<<12)));
 		WRITE_RESET_REG(P_RESETCTRL_RESET5_LEVEL,
@@ -7555,7 +7573,9 @@ EXPORT_SYMBOL(vdec_reset_vld_stbuf);
 
 int is_mmu_copy_enable(void)
 {
-	if (mmu_copy_enable && ((get_cpu_major_id() == AM_MESON_CPU_MAJOR_ID_T3)
+	if (mmu_copy_enable && (atomic_read(&vdec_core->vdec_nr) == 1)
+		&& vdec_core->decoder_mmu_copy_flag
+		&& ((get_cpu_major_id() == AM_MESON_CPU_MAJOR_ID_T3)
 		|| (get_cpu_major_id() == AM_MESON_CPU_MAJOR_ID_S5)))
 		return 1;
 	else

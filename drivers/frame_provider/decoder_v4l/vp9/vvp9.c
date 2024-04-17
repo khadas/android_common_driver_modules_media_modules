@@ -1290,7 +1290,8 @@ static int is_oversize(int w, int h)
 
 	if ((get_cpu_major_id() < AM_MESON_CPU_MAJOR_ID_SM1) ||
 		(get_cpu_major_id() == AM_MESON_CPU_MAJOR_ID_T5M) ||
-		is_cpu_s7())
+		is_cpu_s7() ||
+		(get_cpu_major_id() == AM_MESON_CPU_MAJOR_ID_S7D))
 		max = MAX_SIZE_4K;
 	else if ((get_cpu_major_id() == AM_MESON_CPU_MAJOR_ID_T5D) ||
 		(get_cpu_major_id() == AM_MESON_CPU_MAJOR_ID_TXHD2) ||
@@ -2972,13 +2973,11 @@ int vp9_bufmgr_postproc(struct VP9Decoder_s *pbi)
 				}
 			}
 			mutex_unlock(&pbi->fence_mutex);
-			if (signed_count != 0) {
-				for (i = 0; i < signed_count; i++) {
-					if (!signed_fence[i])
-						continue;
-					buf = (struct aml_buf *)signed_fence[i]->v4l_mem_handle;
-					vp9_recycle_dec_resource(pbi, buf);
-				}
+			for (i = 0; i < signed_count; i++) {
+				if (!signed_fence[i])
+					continue;
+				buf = (struct aml_buf *)signed_fence[i]->v4l_mem_handle;
+				vp9_recycle_dec_resource(pbi, buf);
 			}
 		} else {
 			prepare_display_buf(pbi, &sd);

@@ -31,13 +31,20 @@
 #include "aml_vcodec_util.h"
 #include "vdec_drv_if.h"
 #include "utils/common.h"
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 15, 0)
 #include <linux/amlogic/media/video_processor/di_proc_buf_mgr.h>
-#endif
 
 #define IS_VPP_POST(bm)	(bm->vpp_work_mode == VPP_WORK_MODE_DI_POST)
 
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 15, 0)
+void aml_buf_ref_recycle_worker(struct work_struct *work)
+{
+	struct buf_core_entry *entry =
+		container_of(work, struct buf_core_entry, recycle_buf_ref_work);
+	struct buf_core_mgr_s *bc = entry->bc;
+
+	bc->buf_ops.vpp_cb(bc, entry);
+}
+
+#ifdef CONFIG_AMLOGIC_DI_PROCESS
 static void aml_buf_vpp_callback(void *caller_data, struct file *file, int id)
 {
 	struct buf_core_mgr_s *bc = caller_data;
@@ -52,9 +59,23 @@ static void aml_buf_vpp_callback(void *caller_data, struct file *file, int id)
 		}
 	}
 
-	if (entry && bc->buf_ops.vpp_cb)
-		bc->buf_ops.vpp_cb(bc, entry);
-	else
+	if (entry && bc->buf_ops.vpp_cb) {
+		mutex_lock(&bc->workqueue_mutex);
+		if (bc->workqueue_enabled)
+			queue_work(bc->recycle_buf_ref_workqueue,
+				&entry->recycle_buf_ref_work);
+
+		v4l_dbg_ext(bc->id, V4L_DEBUG_CODEC_BUFMGR,
+			"%s, key:%lx, phy:%lx, idx:%d, st:(%d, %d), free:%d\n",
+			__func__,
+			entry->key,
+			entry->phy_addr,
+			entry->index,
+			entry->state,
+			bc->state,
+			bc->free_num);
+		mutex_unlock(&bc->workqueue_mutex);
+	} else
 		v4l_dbg(bm->priv, V4L_DEBUG_CODEC_ERROR, "entry is NULL\n");
 }
 
@@ -465,7 +486,7 @@ static void aml_buf_mgr_destroy(struct kref *kref)
 	if (bm->fbc_array) {
 		aml_buf_fbc_destroy(bm);
 	}
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 15, 0)
+#ifdef CONFIG_AMLOGIC_DI_PROCESS
 	aml_buf_vpp_mgr_release(bm);
 #endif
 }
@@ -653,8 +674,7 @@ static int aml_buf_set_default_parms(struct aml_buf_mgr_s *bm,
 		// alloc buffer
 		aml_buf_set_planes(bm, buf);
 	}
-
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 15, 0)
+#ifdef CONFIG_AMLOGIC_DI_PROCESS
 	ret = aml_buf_vpp_mgr_init(bm);
 	if (ret) {
 		v4l_dbg(bm->priv, V4L_DEBUG_CODEC_ERROR,
@@ -662,7 +682,6 @@ static int aml_buf_set_default_parms(struct aml_buf_mgr_s *bm,
 		return ret;
 	}
 #endif
-
 	ret = task_chain_init(&buf->task, bm->priv, buf, buf->index);
 	if (ret) {
 		v4l_dbg(bm->priv, V4L_DEBUG_CODEC_ERROR,
@@ -707,6 +726,8 @@ static int aml_buf_alloc(struct buf_core_mgr_s *bc,
 	kref_get(&bm->ref);
 
 	*entry = &buf->entry;
+	buf->entry.bc = bc;
+	INIT_WORK(&buf->entry.recycle_buf_ref_work, aml_buf_ref_recycle_worker);
 
 	return 0;
 
@@ -782,6 +803,14 @@ static void aml_external_process(struct buf_core_mgr_s *bc,
 			container_of(bc, struct aml_buf_mgr_s, bc);
 
 	aml_vdec_recycle_dec_resource(bm->priv, aml_buf);
+}
+
+static void aml_wake_up_vdec(struct buf_core_mgr_s *bc)
+{
+	struct aml_buf_mgr_s *bm =
+			container_of(bc, struct aml_buf_mgr_s, bc);
+
+	aml_vdec_wake_up(bm->priv);
 }
 
 static void aml_buf_prepare(struct buf_core_mgr_s *bc,
@@ -967,6 +996,11 @@ static int aml_buf_get_next_user(struct buf_core_mgr_s *bc,
 	return task_to_user(type);
 }
 
+void aml_buf_workqueue_enable(struct aml_buf_mgr_s *bm)
+{
+	bm->bc.workqueue_enabled = true;
+}
+
 int aml_buf_mgr_init(struct aml_buf_mgr_s *bm, char *name, int id, void *priv)
 {
 	int ret = -1;
@@ -983,6 +1017,7 @@ int aml_buf_mgr_init(struct aml_buf_mgr_s *bm, char *name, int id, void *priv)
 	bm->bc.get_pre_user	= aml_buf_get_pre_user;
 	bm->bc.get_next_user	= aml_buf_get_next_user;
 	bm->bc.external_process	= aml_external_process;
+	bm->bc.wake_up_vdec	= aml_wake_up_vdec;
 	bm->bc.mem_ops.alloc	= aml_buf_alloc;
 	bm->bc.mem_ops.free	= aml_buf_free;
 

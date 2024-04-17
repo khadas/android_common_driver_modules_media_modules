@@ -67,6 +67,7 @@
 #include <linux/amlogic/media/utils/amlog.h>
 #include "../../../stream_input/amports/amports_priv.h"
 #include "../../../frame_provider/decoder/utils/firmware.h"
+#include "../common/encoder_report.h"
 #include <linux/amlogic/media/registers/register.h>
 #include <linux/of_reserved_mem.h>
 #include <linux/version.h>
@@ -509,6 +510,11 @@ static void cav_lut_info_store(u32 index, ulong addr, u32 width,
 }
 
 */
+
+static void set_log_level(const char *module, int level)
+{
+	encode_print_level = level;
+}
 
 static struct file *file_open(const char *path, int flags, int rights)
 {
@@ -1638,7 +1644,8 @@ static s32 set_input_format(struct encode_wq_s *wq,
 
 			if ((get_cpu_major_id() == AM_MESON_CPU_MAJOR_ID_T3) || \
 				(get_cpu_major_id() == AM_MESON_CPU_MAJOR_ID_T5M) || \
-				(get_cpu_major_id() == AM_MESON_CPU_MAJOR_ID_T3X)) {
+				(get_cpu_major_id() == AM_MESON_CPU_MAJOR_ID_T3X) || \
+				(get_cpu_major_id() == AM_MESON_CPU_MAJOR_ID_S7D)) {
 				/*
 				 * for t3, after scaling before goto MFDIN, need to config canvas with scaler buffer
 				 * */
@@ -1865,7 +1872,8 @@ static s32 set_input_format(struct encode_wq_s *wq,
 
 			if ((get_cpu_major_id() == AM_MESON_CPU_MAJOR_ID_T3) || \
 				(get_cpu_major_id() == AM_MESON_CPU_MAJOR_ID_T5M) || \
-				(get_cpu_major_id() == AM_MESON_CPU_MAJOR_ID_T3X)) {
+				(get_cpu_major_id() == AM_MESON_CPU_MAJOR_ID_T3X) || \
+				(get_cpu_major_id() == AM_MESON_CPU_MAJOR_ID_S7D)) {
 				struct canvas_s cs0, cs1;//, cs2
 				u32 y_addr, uv_addr, canvas_w, picsize_y;
 				u8 iformat = MAX_FRAME_FMT;
@@ -2817,7 +2825,7 @@ s32 amvenc_loadmc(const char *p, struct encode_wq_s *wq)
 {
 	ulong timeout;
 	s32 ret = 0;
-    if (get_cpu_major_id() >= AM_MESON_CPU_MAJOR_ID_SC2) {
+    if (fw_tee_enabled() && (get_cpu_major_id() >= AM_MESON_CPU_MAJOR_ID_SC2)) {
         char *buf = vmalloc(0x1000 * 16);
         int ret = -1;
         enc_pr(LOG_INFO, "load firmware for t3 avc encoder\n");
@@ -2972,7 +2980,8 @@ static s32 avc_poweron(u32 clock)
 		udelay(20);
 		if ((get_cpu_major_id() == AM_MESON_CPU_MAJOR_ID_T3) || \
 			(get_cpu_major_id() == AM_MESON_CPU_MAJOR_ID_T5M) || \
-			(get_cpu_major_id() == AM_MESON_CPU_MAJOR_ID_T3X)) {
+			(get_cpu_major_id() == AM_MESON_CPU_MAJOR_ID_T3X) || \
+			(get_cpu_major_id() == AM_MESON_CPU_MAJOR_ID_S7D)) {
 			vdec_poweron(VDEC_HCODEC);
 			enc_pr(LOG_INFO, "vdec_poweron VDEC_HCODEC\n");
 		} else {
@@ -3006,7 +3015,8 @@ static s32 avc_poweron(u32 clock)
 	/* Enable Dos internal clock gating */
 	if ((get_cpu_major_id() == AM_MESON_CPU_MAJOR_ID_T3) || \
 		(get_cpu_major_id() == AM_MESON_CPU_MAJOR_ID_T5M) || \
-		(get_cpu_major_id() == AM_MESON_CPU_MAJOR_ID_T3X)) {
+		(get_cpu_major_id() == AM_MESON_CPU_MAJOR_ID_T3X) || \
+		(get_cpu_major_id() == AM_MESON_CPU_MAJOR_ID_S7D)) {
 		WRITE_VREG_BITS(DOS_GCLK_EN0, 0x7fff, 12, 15);
 		/*
 		 * WRITE_VREG(DOS_GCLK_EN0, 0xffffffff);
@@ -3047,7 +3057,8 @@ static s32 avc_poweroff(void)
 
 		if ((get_cpu_major_id() == AM_MESON_CPU_MAJOR_ID_T3) || \
 			(get_cpu_major_id() == AM_MESON_CPU_MAJOR_ID_T5M) || \
-			(get_cpu_major_id() == AM_MESON_CPU_MAJOR_ID_T3X)) {
+			(get_cpu_major_id() == AM_MESON_CPU_MAJOR_ID_T3X) || \
+			(get_cpu_major_id() == AM_MESON_CPU_MAJOR_ID_S7D)) {
 			vdec_poweroff(VDEC_HCODEC);
 			enc_pr(LOG_INFO, "vdec_poweroff VDEC_HCODEC\n");
 		} else {
@@ -3072,7 +3083,8 @@ static s32 avc_poweroff(void)
 	/* disable HCODEC clock */
 	if ((get_cpu_major_id() == AM_MESON_CPU_MAJOR_ID_T3) || \
 		(get_cpu_major_id() == AM_MESON_CPU_MAJOR_ID_T5M) || \
-		(get_cpu_major_id() == AM_MESON_CPU_MAJOR_ID_T3X)) {
+		(get_cpu_major_id() == AM_MESON_CPU_MAJOR_ID_T3X) || \
+		(get_cpu_major_id() == AM_MESON_CPU_MAJOR_ID_S7D)) {
 		WRITE_VREG_BITS(DOS_GCLK_EN0, 0, 12, 15);
 	} else
 		hvdec_clock_disable();
@@ -5029,6 +5041,7 @@ static s32 __init amvenc_avc_driver_init_module(void)
 		return -ENODEV;
 	}
 	//vcodec_profile_register(&amvenc_avc_profile);
+	enc_register_set_debug_level_func(DEBUG_AMVENC_264, set_log_level);
 	return 0;
 }
 

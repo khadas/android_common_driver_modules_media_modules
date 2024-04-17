@@ -53,6 +53,8 @@
 #include "../../../frame_provider/decoder/utils/firmware.h"
 #include "../../../frame_provider/decoder/utils/vdec.h"
 #include "../../../frame_provider/decoder/utils/vdec_power_ctrl.h"
+#include "../common/encoder_report.h"
+
 #include <linux/amlogic/media/codec_mm/codec_mm.h>
 #include "jpegenc.h"
 #include <linux/of_reserved_mem.h>
@@ -554,6 +556,11 @@ static s32 enc_src_addr_config(struct encdrv_dma_buf_info_t *pinfo,
         struct file *filp);
 static s32 enc_free_buffers(struct file *filp);
 static int enc_dma_buf_get_phys(struct enc_dma_cfg *cfg, unsigned long *addr);
+
+static void set_log_level(const char *module, int level)
+{
+    jpegenc_print_level = level;
+}
 
 static void dump_request(struct jpegenc_request_s *request) {
     jenc_pr(LOG_DEBUG, "jpegenc: dump request start\n");
@@ -3123,7 +3130,8 @@ static s32 set_jpeg_input_format(struct jpegenc_wq_s *wq,
 
             if ((get_cpu_major_id() == AM_MESON_CPU_MAJOR_ID_T3) || \
                 (get_cpu_major_id() == AM_MESON_CPU_MAJOR_ID_T5M) || \
-                (get_cpu_major_id() == AM_MESON_CPU_MAJOR_ID_T3X)) {
+                (get_cpu_major_id() == AM_MESON_CPU_MAJOR_ID_T3X) || \
+                (get_cpu_major_id() == AM_MESON_CPU_MAJOR_ID_S7D)) {
                 if ((cmd->input_fmt == JPEGENC_FMT_RGB565)
                     || (cmd->input_fmt >= JPEGENC_MAX_FRAME_FMT))
                     return -1;
@@ -3670,7 +3678,7 @@ s32 jpegenc_loadmc(const char *p)
     if ((get_cpu_major_id() == AM_MESON_CPU_MAJOR_ID_T7) || (get_cpu_major_id() == AM_MESON_CPU_MAJOR_ID_S5))
         WRITE_HREG(HCODEC_IMEM_DMA_CTRL, (0x8000 | (0xf << 16))); // ucode test c is 0x8000 | (0xf << 16)
     else if ((get_cpu_major_id() == AM_MESON_CPU_MAJOR_ID_T3) || (get_cpu_major_id() == AM_MESON_CPU_MAJOR_ID_T5M) || \
-        (get_cpu_major_id() == AM_MESON_CPU_MAJOR_ID_T3X)) {
+        (get_cpu_major_id() == AM_MESON_CPU_MAJOR_ID_T3X) || (get_cpu_major_id() == AM_MESON_CPU_MAJOR_ID_S7D)) {
         jenc_pr(LOG_INFO, "t3 HCODEC_IMEM_DMA_CTRL (0x8000 | (0xf << 16))\n");
         WRITE_HREG(HCODEC_IMEM_DMA_CTRL, (0x8000 | (0xf << 16))); // Endian : 4'b1000);
     } else if (get_cpu_major_id() == AM_MESON_CPU_MAJOR_ID_SC2) {
@@ -3899,7 +3907,7 @@ static s32 jpegenc_init(void)
 
     jenc_pr(LOG_ALL, "start to load microcode\n");
 
-    if (!legacy_load && ((get_cpu_major_id() >= AM_MESON_CPU_MAJOR_ID_T7 )
+    if (fw_tee_enabled() && !legacy_load && ((get_cpu_major_id() >= AM_MESON_CPU_MAJOR_ID_T7 )
         || (get_cpu_major_id() == AM_MESON_CPU_MAJOR_ID_SC2 ))) {
         char *buf = vmalloc(0x1000 * 16);
         int ret = -1;
@@ -4972,7 +4980,8 @@ static s32 jpegenc_probe(struct platform_device *pdev)
 
     if ((get_cpu_major_id() == AM_MESON_CPU_MAJOR_ID_T3) || \
         (get_cpu_major_id() == AM_MESON_CPU_MAJOR_ID_T5M) || \
-        (get_cpu_major_id() == AM_MESON_CPU_MAJOR_ID_T3X)) {
+        (get_cpu_major_id() == AM_MESON_CPU_MAJOR_ID_T3X) || \
+        (get_cpu_major_id() == AM_MESON_CPU_MAJOR_ID_S7D)) {
         jenc_pr(LOG_INFO, "jpegenc_probe: jpeg_in_full_hcodec\n");
         jpeg_in_full_hcodec = 1;
         mfdin_ambus_canv_conv = 1;
@@ -5185,6 +5194,7 @@ static s32 __init jpegenc_driver_init_module(void)
 #if 0
     vcodec_profile_register(&jpegenc_profile);
 #endif
+    enc_register_set_debug_level_func(DEBUG_AMVENC_JPEG, set_log_level);
     return 0;
 }
 

@@ -1394,7 +1394,7 @@ static void v4l_vmpeg2_fill_userdata(struct vdec_mpeg12_hw_s *hw,
 			if (index >= data_len)
 				tmp_buf[i + j] = 0;
 			else
-				tmp_buf[i + j] = sei_data_buf[i + 7 - j];
+				tmp_buf[i + j] = sei_data_buf[index];
 		}
 	}
 
@@ -1748,10 +1748,10 @@ static void v4l_mpeg12_collect_stream_info(struct vdec_s *vdec,
 		}
 	}
 	str_info->trick_mode = hw->i_only;
-	str_info->frame_dur = hw->frame_dur;
-	if (hw->frame_dur != 0)
-		str_info->frame_rate = ((96000 * 10 / hw->frame_dur) % 10) < 5 ?
-				96000 / hw->frame_dur : (96000 / hw->frame_dur +1);
+	str_info->frame_dur = hw->last_dur;
+	if (str_info->frame_dur != 0)
+		str_info->frame_rate = ((96000 * 10 / str_info->frame_dur) % 10) < 5 ?
+				96000 / str_info->frame_dur : (96000 / str_info->frame_dur +1);
 	else
 		str_info->frame_rate = -1;
 	ctx->dec_intf.decinfo_event_report(ctx, AML_DECINFO_EVENT_STREAM, NULL);
@@ -2704,7 +2704,7 @@ static irqreturn_t vmpeg12_isr_thread_handler(struct vdec_s *vdec, int irq)
 		}
 
 		debug_print(DECODE_ID(hw), PRINT_FLAG_RUN_FLOW,
-			"mmpeg12: disp_pic=%d(%c), poc %d, ind=%d, offst=%x, pts=(%d,%lld,%lld)(%d)\n",
+			"mmpeg12: disp_pic=%d(%c), ind=%d, offst=%x, poc %d, pts=(%d,%lld,%lld)(%d)\n",
 			hw->disp_num, GET_SLICE_TYPE(info), index, disp_pic->offset, disp_pic->poc,
 			disp_pic->pts, disp_pic->pts64,
 			disp_pic->timestamp, disp_pic->pts_valid);

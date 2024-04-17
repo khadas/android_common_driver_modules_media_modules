@@ -588,6 +588,12 @@ static int vmpeg12_v4l_alloc_buff_config_canvas(struct vdec_mpeg12_hw_s *hw, int
 	return 0;
 }
 
+static u32 get_dynamic_buf_num_margin(struct vdec_mpeg12_hw_s *hw)
+{
+	return((dynamic_buf_num_margin & 0x80000000) == 0) ?
+		hw->dynamic_buf_num_margin :
+		(dynamic_buf_num_margin & 0x7fffffff);
+}
 
 static unsigned int vmpeg12_get_buf_num(struct vdec_mpeg12_hw_s *hw)
 {
@@ -2591,7 +2597,7 @@ static irqreturn_t vmpeg12_isr_thread_handler(struct vdec_s *vdec, int irq)
 		}
 
 		debug_print(DECODE_ID(hw), PRINT_FLAG_RUN_FLOW,
-			"mmpeg12: disp_pic=%d(%c), poc %d, ind=%d, offst=%x, pts=(%d,%lld,%llx)(%d)\n",
+			"mmpeg12: disp_pic=%d(%c), ind=%d, offst=%x, poc %d, pts=(%d,%lld,%llx)(%d)\n",
 			hw->disp_num, GET_SLICE_TYPE(info), index, disp_pic->offset, disp_pic->poc,
 			disp_pic->pts, disp_pic->pts64,
 			disp_pic->timestamp, disp_pic->pts_valid);
@@ -4234,7 +4240,7 @@ static int ammvdec_mpeg12_probe(struct platform_device *pdev)
 			hw->canvas_mode = config_val;
 
 		if (get_config_int(pdata->config,
-			"parm_v4l_buffer_margin",
+			"parm_buffer_margin",
 			&config_val) == 0)
 			hw->dynamic_buf_num_margin= config_val;
 
@@ -4265,6 +4271,7 @@ static int ammvdec_mpeg12_probe(struct platform_device *pdev)
 	if (error_frame_skip_level & 0x80000000)
 		hw->error_frame_skip_level  = error_frame_skip_level & 0x7fffffff;
 
+	hw->dynamic_buf_num_margin = get_dynamic_buf_num_margin(hw);
 	hw->buf_num = vmpeg12_get_buf_num(hw);
 
 	hw->tvp_flag = vdec_secure(pdata) ? CODEC_MM_FLAGS_TVP : 0;

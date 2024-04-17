@@ -156,6 +156,7 @@ static void pm_vdec_clock_on(int id)
 		amports_switch_gate("clk_vdec_mux", 1);
 		vdec_clock_hi_enable();
 	} else if (id == VDEC_HCODEC) {
+		amports_switch_gate("clk_hcodec_mux", 1);
 		hcodec_clock_enable();
 	} else if (id == VDEC_HEVC) {
 		/* enable hevc clock */
@@ -196,7 +197,8 @@ static void dos_local_config(bool is_on, int id)
 	if ((get_cpu_major_id() != AM_MESON_CPU_MAJOR_ID_S5) &&
 		(get_cpu_major_id() != AM_MESON_CPU_MAJOR_ID_T5M) &&
 		(get_cpu_major_id() != AM_MESON_CPU_MAJOR_ID_T3X) &&
-		(get_cpu_major_id() != AM_MESON_CPU_MAJOR_ID_S7))
+		(get_cpu_major_id() != AM_MESON_CPU_MAJOR_ID_S7) &&
+		(get_cpu_major_id() != AM_MESON_CPU_MAJOR_ID_S7D))
 		return;
 
 	if (is_on) {

@@ -386,7 +386,6 @@ static u32 one_packet_multi_frames_multi_run = 1;
 static void vmh264_dump_state(struct vdec_s *vdec);
 static void h264_recycle_dec_resource(void *priv, struct aml_buf *aml_buf);
 
-
 #define is_in_parsing_state(status) \
 		((status == H264_ACTION_SEARCH_HEAD) || \
 			((status & 0xf0) == 0x80))
@@ -1040,6 +1039,7 @@ static void vh264_work_implement(struct vdec_h264_hw_s *hw,
 	struct vdec_s *vdec, int from);
 static void v4l_vmh264_collect_stream_info(struct vdec_s *vdec,
 	struct vdec_h264_hw_s *hw);
+
 
 #define		H265_PUT_SAO_4K_SET			0x03
 #define		H265_ABORT_SAO_4K_SET			0x04
@@ -5078,6 +5078,10 @@ static void vh264_vf_put(struct vframe_s *vf, void *op_arg)
 	aml_buf = (struct aml_buf *)vf->v4l_mem_handle;
 
 	aml_buf_put_ref(&ctx->bm, aml_buf);
+	if (input_frame_based(vdec)) {
+		ctx->current_timestamp = vf->timestamp;
+		vdec_v4l_post_error_frame_event(ctx);
+	}
 	h264_recycle_dec_resource(hw, aml_buf);
 	vdec_up(vdec);
 	return;
@@ -6944,7 +6948,6 @@ static int vh264_pic_done_proc(struct vdec_s *vdec)
 		} else
 			hw->frmbase_cont_flag = 0;
 
-		mutex_lock(&hw->pic_mutex);
 		if (p_H264_Dpb->mVideo.dec_picture) {
 			get_picture_qos_info(p_H264_Dpb->mVideo.dec_picture);
 			hw->gvs.frame_dur = hw->frame_dur;
@@ -7080,12 +7083,10 @@ static int vh264_pic_done_proc(struct vdec_s *vdec)
 				p_H264_Dpb->mVideo.dec_picture->data_flag);
 
 			if (ret == -1) {
-				mutex_unlock(&hw->pic_mutex);
 				release_cur_decoding_buf(hw);
 				bufmgr_force_recover(p_H264_Dpb);
 				return -1;
 			} else if (ret == -2) {
-				mutex_unlock(&hw->pic_mutex);
 				release_cur_decoding_buf(hw);
 				return -2;
 			} else {
@@ -7124,7 +7125,6 @@ static int vh264_pic_done_proc(struct vdec_s *vdec)
 				}
 			}
 		}
-		mutex_unlock(&hw->pic_mutex);
 		return 0;
 }
 
@@ -7624,15 +7624,16 @@ static irqreturn_t vh264_isr_thread_fn(struct vdec_s *vdec, int irq)
 		vui_config(hw);
 
 		if (slice_header_process_status == -1) {
-			if (p_H264_Dpb->mVideo.dec_picture &&
-				p_H264_Dpb->mVideo.dec_picture->buf_spec_num  != -1)
-				buf_ref_process_for_exception(hw);
 			if (!multi_header_error_frame_flag) {
+				if (p_H264_Dpb->mVideo.dec_picture &&
+					p_H264_Dpb->mVideo.dec_picture->buf_spec_num  != -1)
+				buf_ref_process_for_exception(hw);
 				if (input_frame_based(vdec))
 					vdec_v4l_post_error_frame_event(ctx);
 				else
 					vh264_report_pts(hw);
-			}
+			} else
+				hw->dpb.cur_idx = INVALID_IDX;
 			amvdec_stop();
 			hw->dec_result = DEC_RESULT_DONE;
 			vdec_schedule_work(&hw->work);
@@ -7707,11 +7708,12 @@ static irqreturn_t vh264_isr_thread_fn(struct vdec_s *vdec, int irq)
 					}
 				}
 
-			if (!I_flag && frame_num_gap && !p_H264_Dpb->long_term_reference_flag) {
+			if ((!I_flag && (frame_num_gap == FrameNumGap_Normal) && !p_H264_Dpb->long_term_reference_flag)
+				|| (frame_num_gap == FrameNumGap_Loop)) {
 				if (!(hw->error_proc_policy & 0x800000)) {
 					hw->data_flag |= ERROR_FLAG;
 					p_H264_Dpb->mVideo.dec_picture->data_flag |= ERROR_FLAG;
-					dpb_print(DECODE_ID(hw), 0, "frame number gap error\n");
+					dpb_print(DECODE_ID(hw), 0, "frame number gap %d error\n", frame_num_gap);
 				}
 			}
 
@@ -8187,7 +8189,7 @@ send_again:
 		}
 		ATRACE_COUNTER(hw->trace.decode_time_name, DECODER_ISR_THREAD_EDN);
 		WRITE_VREG(DPB_STATUS_REG, H264_SEI_DATA_DONE);
-
+		start_process_time(hw);
 		return IRQ_HANDLED;
 	}
 
@@ -8257,6 +8259,9 @@ static irqreturn_t vh264_isr(struct vdec_s *vdec, int irq)
 	struct h264_dpb_stru *p_H264_Dpb = &hw->dpb;
 	ulong flags;
 
+	if (!hw)
+		return IRQ_HANDLED;
+
 	flags = h264_timeout_lock(hw);
 	WRITE_VREG(ASSIST_MBOX1_CLR_REG, 1);
 
@@ -8268,11 +8273,6 @@ static irqreturn_t vh264_isr(struct vdec_s *vdec, int irq)
 	}
 
 	h264_timeout_unlock(hw, flags);
-
-	if (!hw) {
-		start_process_time(hw);
-		return IRQ_HANDLED;
-	}
 
 	if (hw->eos) {
 		start_process_time(hw);
@@ -8550,6 +8550,7 @@ static void check_timer_func(struct timer_list *timer)
 		u32 dpb_status = READ_VREG(DPB_STATUS_REG);
 		u32 mby_mbx = READ_VREG(MBY_MBX);
 		if ((dpb_status == H264_ACTION_DECODE_NEWPIC) ||
+			(dpb_status == H264_ACTION_CONFIG_DONE) ||
 			(dpb_status == H264_ACTION_DECODE_SLICE) ||
 			(dpb_status == H264_SEI_DATA_DONE) ||
 			(dpb_status == H264_STATE_SEARCH_HEAD) ||
@@ -9493,7 +9494,7 @@ static void v4l_vmh264_fill_userdata(struct vdec_h264_hw_s *hw,
 			if (index >= data_len)
 				tmp_buf[i + j] = 0;
 			else
-				tmp_buf[i + j] = sei_data_buf[i + 7 - j];
+				tmp_buf[i + j] = sei_data_buf[index];
 		}
 	}
 
@@ -10036,10 +10037,10 @@ static void v4l_vmh264_collect_stream_info(struct vdec_s *vdec,
 	str_info->ratio_size.dar_width = -1;
 	str_info->ratio_size.dar_height = -1;
 	str_info->trick_mode = hw->i_only;
-	str_info->frame_dur = hw->frame_dur;
-	if (hw->frame_dur != 0)
-		str_info->frame_rate = ((96000 * 10 / hw->frame_dur) % 10) < 5 ?
-				96000 / hw->frame_dur : (96000 / hw->frame_dur +1);
+	str_info->frame_dur = hw->last_dur;
+	if (str_info->frame_dur != 0)
+		str_info->frame_rate = ((96000 * 10 / str_info->frame_dur) % 10) < 5 ?
+				96000 / str_info->frame_dur : (96000 / str_info->frame_dur +1);
 	else
 		str_info->frame_rate = -1;
 	ctx->dec_intf.decinfo_event_report(ctx, AML_DECINFO_EVENT_STREAM, NULL);
