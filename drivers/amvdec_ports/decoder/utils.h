@@ -19,6 +19,7 @@
  */
 #ifndef _UTILS_H
 #define _UTILS_H
+#include "../../common/media_utils/media_utils.h"
 
 #define MAX(a, b)  (((a) > (b)) ? (a) : (b))
 #define MIN(a, b)  (((a) < (b)) ? (a) : (b))
