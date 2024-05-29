@@ -23,6 +23,9 @@
 #include <linux/init.h>
 #include <linux/printk.h>
 #include <linux/fs.h>
+#include <linux/mm.h>
+#include <linux/slab.h>
+#include <linux/vmalloc.h>
 
 ssize_t media_write(struct file *file, const void *buf, size_t count, loff_t *pos)
 {
@@ -47,4 +50,16 @@ int media_close(struct file *filp, fl_owner_t id)
 	return filp_close(filp, id);
 }
 EXPORT_SYMBOL(media_close);
+
+inline void *aml_media_mem_alloc(size_t size, gfp_t flags)
+{
+	return size >= SZ_8K ? vzalloc(size) : kzalloc(size, flags);
+}
+EXPORT_SYMBOL(aml_media_mem_alloc);
+
+inline void aml_media_mem_free(const void *addr)
+{
+	kvfree(addr);
+}
+EXPORT_SYMBOL(aml_media_mem_free);
 
